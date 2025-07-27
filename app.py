@@ -122,7 +122,26 @@ if run_button:
             ])
             st.success(f"총 **{len(df):,}**건 매칭 완료")
             st.dataframe(df)
-            csv = df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button("📥 CSV 다운로드", csv, "dart_execs.csv", "text/csv")
+
+            # ── CSV 다운로드 (CP949) ──────────────────────────────────────────────
+            csv_cp949 = df.to_csv(index=False, encoding='cp949', errors='replace')
+            st.download_button(
+                "📥 CSV 다운로드 (CP949)",
+                data=csv_cp949,
+                file_name="dart_execs_cp949.csv",
+                mime="text/csv"
+            )
+
+            # ── Excel(xlsx) 다운로드 ─────────────────────────────────────────────
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Sheet1')
+            st.download_button(
+                "📥 XLSX 다운로드",
+                data=output.getvalue(),
+                file_name="dart_execs.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
         else:
             st.info("키워드에 매칭된 임원이 없습니다.")
