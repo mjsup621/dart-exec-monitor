@@ -14,6 +14,7 @@ st.title("📊 DART 임원 ‘주요경력’ 모니터링 서비스")
 
 # 1) 사용자 입력 UI
 api_key  = st.text_input("🔑 DART API Key", type="password")
+api_key  = api_key.strip()  # 앞뒤 공백 제거
 kw_input = st.text_input(
     "🔍 검색할 키워드 (쉼표로 구분)",
     value="이촌,삼정,안진,삼성,LG,현대,삼일"
@@ -23,6 +24,7 @@ markets = st.multiselect(
     ["KOSPI", "KOSDAQ", "KONEX"],
     default=["KOSPI", "KOSDAQ", "KONEX"]
 )
+
 # 2) 사업연도 범위 선택
 current_year = datetime.now().year
 start_year, end_year = st.slider(
@@ -31,6 +33,7 @@ start_year, end_year = st.slider(
     value=(current_year - 1, current_year),
     step=1
 )
+
 run_button = st.button("▶️ 모니터링 시작")
 
 # 초기화: 세션에 결과가 없으면 빈 리스트 할당
@@ -43,7 +46,8 @@ def fetch_corp_list(crtfc_key):
     resp.raise_for_status()
     content = resp.content
     if not content.startswith(b'PK'):
-        st.error("corpCode.xml이 ZIP이 아닙니다. API Key를 확인하세요.")
+        err = resp.text.replace('\n',' ')[:200]
+        st.error(f"❌ corpCode.xml이 ZIP이 아닙니다.\nAPI 응답: {err}")
         return []
     zf   = zipfile.ZipFile(io.BytesIO(content))
     xml  = zf.open(zf.namelist()[0]).read()
@@ -61,18 +65,15 @@ def fetch_corp_list(crtfc_key):
 
 def filter_by_market(corps, markets):
     def in_market(code, m):
-        # 숫자가 아닌 경우 제외
+        # 숫자가 아니면 제외
         if not code.isdigit():
             return False
         c = int(code)
-        # KOSPI: 1 ~ 99,999
-        if m == "KOSPI":
+        if m == "KOSPI":    # 1 ~ 99,999
             return 1 <= c < 100000
-        # KOSDAQ: 100,000 ~ 899,999
-        if m == "KOSDAQ":
+        if m == "KOSDAQ":   # 100,000 ~ 899,999
             return 100000 <= c < 900000
-        # KONEX: 900,000 이상
-        if m == "KONEX":
+        if m == "KONEX":    # 900,000 이상
             return c >= 900000
         return False
     return [c for c in corps if any(in_market(c['stock_code'], m) for m in markets)]
@@ -98,7 +99,7 @@ if run_button:
 
         with st.spinner("1) 상장회사 목록 다운로드 중…"):
             corps = fetch_corp_list(api_key)
-        corps = filter_by_market(corps, markets)
+        corps       = filter_by_market(corps, markets)
         total_corps = len(corps)
         st.write(f"✅ 대상 회사: **{total_corps:,}** 개, 사업연도: {start_year} ~ {end_year}")
 
@@ -116,8 +117,8 @@ if run_button:
                         results.append({
                             '회사명':           corp['corp_name'],
                             '종목코드':         corp['stock_code'],
-                            '임원이름':         r.get('nm', ''),
-                            '직위':             r.get('ofcps', ''),
+                            '임원이름':         r.get('nm',''),
+                            '직위':             r.get('ofcps',''),
                             '주요경력':         mc,
                             'matched_keywords': ",".join(matched),
                             'source':           str(y)
@@ -129,7 +130,6 @@ if run_button:
             if idx % STATUS_INTERVAL == 0 or idx == total_corps:
                 progress.progress(idx / total_corps)
 
-        # 세션에 결과 저장
         st.session_state['results'] = results
 
 # 4) 세션에 결과가 있으면 항상 보여주기
@@ -141,7 +141,6 @@ if st.session_state['results']:
             '주요경력', 'matched_keywords', 'source'
         ]
     )
-
     st.success(f"총 **{len(df):,}**건 매칭 완료")
     st.dataframe(df)
 
