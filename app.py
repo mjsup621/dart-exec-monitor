@@ -1,4 +1,4 @@
-# app.py (테스트용: 상위 TEST_LIMIT개 회사만 처리, 키워드 기본값 간소화)
+# app.py (테스트용: 결과 없을 때 “결과물이 없습니다” 표시)
 import streamlit as st
 import requests, zipfile, io, xml.etree.ElementTree as ET, pandas as pd, time
 from datetime import datetime
@@ -16,8 +16,7 @@ st.title("📊 DART 임원 ‘주요경력’ 모니터링 서비스 (테스트 
 
 # 1) 사용자 입력
 api_key  = st.text_input("🔑 DART API Key", type="password").strip()
-kw_input = st.text_input("🔍 검색할 키워드 (쉼표로 구분)",
-                         value="이촌,삼정,안진")
+kw_input = st.text_input("🔍 검색할 키워드 (쉼표로 구분)", value="이촌,삼정,안진")
 
 # 2) 보고서 종류 다중 선택
 REPORT_CHOICES = {
@@ -57,7 +56,7 @@ session = requests.Session()
 retries = Retry(total=2, backoff_factor=1, status_forcelist=[500,502,503,504])
 session.mount("https://", HTTPAdapter(max_retries=retries))
 
-# 7) corpCode.xml 호출 (예외 발생 시 에러 없이 빈 리스트 반환)
+# 7) corpCode.xml 호출
 @st.cache_data(show_spinner=False)
 def load_corp_list(key):
     resp = session.get(
@@ -103,14 +102,14 @@ if run_button:
     else:
         keywords = [w.strip() for w in kw_input.split(",") if w.strip()]
 
-        # 9-A) 회사 목록 로드
+        # 회사 목록 로드
         try:
             corps = load_corp_list(api_key)
         except Exception:
             st.warning("회사 목록을 불러오지 못했습니다.")
             st.stop()
 
-        # 9-B) 상장/비상장 필터 & 테스트 제한
+        # 상장/비상장 필터 & 테스트 제한
         all_targets = [
             c for c in corps
             if ((c["stock_code"] and "상장사" in listing) or
@@ -152,24 +151,26 @@ if run_button:
 
         st.session_state["results"] = results
 
-# 10) 결과 표시 & 다운로드
-if st.session_state["results"]:
-    df = pd.DataFrame(
-        st.session_state["results"],
-        columns=[
-            "회사명","종목코드","사업연도","보고서종류",
-            "임원이름","직위","주요경력","matched_keywords","source"
-        ]
-    )
+# 10) 결과 표시 & 다운로드 (결과 없을 땐 안내 메시지)
+df = pd.DataFrame(
+    st.session_state.get("results", []),
+    columns=[
+        "회사명","종목코드","사업연도","보고서종류",
+        "임원이름","직위","주요경력","matched_keywords","source"
+    ]
+)
+if df.empty:
+    st.info("🔍 매칭된 결과물이 없습니다.")
+else:
     st.success(f"총 **{len(df):,}**건 매칭 완료 (테스트)")
-    st.dataframe(df)
+st.dataframe(df)
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Sheet1")
-    st.download_button(
-        "📥 XLSX 다운로드 (테스트)",
-        data=buf.getvalue(),
-        file_name="dart_execs_test.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+buf = io.BytesIO()
+with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+    df.to_excel(writer, index=False, sheet_name="Sheet1")
+st.download_button(
+    "📥 XLSX 다운로드 (테스트)",
+    data=buf.getvalue(),
+    file_name="dart_execs_test.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                              )
