@@ -10,6 +10,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
+import time
 
 # --- Google Sheets 인증 ---
 service_account_info = json.loads(st.secrets["SERVICE_ACCOUNT_JSON"])
@@ -35,12 +36,32 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
 .api-label {font-weight:600; color:#111; font-size:17px; margin-bottom:8px;}
 .stDataFrame {border-radius:18px;}
 .job-badge {display:inline-block;background:#007aff;color:#fff;border-radius:8px;padding:0 7px;}
+.api-limit-warning {background:#fff3cd;border:1px solid #ffeaa7;border-radius:8px;padding:12px;margin:10px 0;}
+.success-box {background:#d1edff;border-radius:8px;padding:12px;margin:10px 0;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h2 style='font-size:2.3rem;margin-bottom:0.7em;'><b>DART 임원 <span style='color:#007aff'>‘주요경력’</span> 모니터링 서비스</b></h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='font-size:2.3rem;margin-bottom:0.7em;'><b>DART 임원 <span style='color:#007aff'>'주요경력'</span> 모니터링 서비스</b></h2>", unsafe_allow_html=True)
 
-# --- API KEY (3개씩 2줄 라디오+직접입력 우선) ---
+# --- 최근 사용 API 관리 함수 ---
+def get_recent_apis():
+    """최근 사용한 API 키 3개 가져오기"""
+    if 'recent_apis' not in st.session_state:
+        st.session_state.recent_apis = []
+    return st.session_state.recent_apis[:3]
+
+def add_recent_api(api_key):
+    """최근 사용 API에 추가 (중복 제거, 최대 3개)"""
+    if 'recent_apis' not in st.session_state:
+        st.session_state.recent_apis = []
+    
+    if api_key in st.session_state.recent_apis:
+        st.session_state.recent_apis.remove(api_key)
+    
+    st.session_state.recent_apis.insert(0, api_key)
+    st.session_state.recent_apis = st.session_state.recent_apis[:3]
+
+# --- API KEY (프리셋 + 최근 사용 + 직접입력) ---
 api_presets = [
     ("API 1", "eeb883965e882026589154074cddfc695330693c"),
     ("API 2", "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176"),
@@ -49,6 +70,14 @@ api_presets = [
     ("API 5", "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8"),
     ("API 6", "c38b1fdef8960f694f56a50cf4e52d5c25fd5675"),
 ]
+
+# 최근 사용 API 표시
+recent_apis = get_recent_apis()
+if recent_apis:
+    st.markdown("**🕐 최근 사용 API** (참고용)")
+    for i, api in enumerate(recent_apis, 1):
+        st.markdown(f"&nbsp;&nbsp;최근 {i}: `{api[:8]}...{api[-8:]}`")
+
 api_labels = [x[0] for x in api_presets]
 api_keys_list = [x[1] for x in api_presets]
 
@@ -62,7 +91,7 @@ with col_api_left:
     with col_api_row2:
         selected2 = st.radio("", api_labels[3:], key="api_preset_row2")
 
-    # 두 줄 중 선택된 API 가져오기 (단, 직접입력 있으면 무시됨)
+    # 두 줄 중 선택된 API 가져오기
     selected_preset = selected1 if selected1 != api_labels[0] else selected2
     api_key_selected = dict(api_presets)[selected_preset] if selected_preset in dict(api_presets) else api_presets[0][1]
 
@@ -71,6 +100,7 @@ with col_api_right:
     api_key_input = st.text_area(
         "", value="", height=40, placeholder="복사/붙여넣기 (한 개만 적용)"
     )
+
 api_keys = [k.strip() for k in api_key_input.replace(",", "\n").splitlines() if k.strip()]
 corp_key = api_keys[0] if api_keys else api_key_selected
 
@@ -108,6 +138,7 @@ start_y, end_y = st.slider("사업연도 범위", 2000, cy, (cy-1, cy))
 # ---- 이어받기/복구 UI ----
 jobs_data = jobs_ws.get_all_records()
 unfinished = [r for r in jobs_data if r["status"] in ("stopped","failed")][-1:]  # 최근 1개
+
 if unfinished:
     rj = unfinished[0]
     st.markdown(
@@ -119,7 +150,9 @@ if unfinished:
         unsafe_allow_html=True
     )
     if st.button("▶️ 이어서 복구/재시작", key="resume_btn"):
-        st.session_state.resume_job = rj["job_id"]
+        st.session_state.resume_job_id = rj["job_id"]
+        st.session_state.resume_data = rj
+        st.success(f"작업 {rj['job_id']} 복구 준비 완료!")
 
 # ---- 컨트롤 버튼/진행상태 ----
 col1, col2 = st.columns(2)
@@ -137,6 +170,9 @@ if run:
         st.session_state.progress = 0
         st.session_state.start_time = datetime.now(KST)
         st.session_state.results = []
+        st.session_state.api_call_count = 0
+        # 최근 사용 API에 추가
+        add_recent_api(corp_key)
 
 if stop:
     st.session_state.running = False
@@ -170,6 +206,16 @@ def load_corp_list(key):
     except Exception as e:
         return None, str(e)
 
+def check_api_limit_error(data):
+    """API 한도 초과 에러 체크"""
+    if isinstance(data, dict):
+        status = data.get("status")
+        message = data.get("message", "")
+        # API 한도 초과 관련 에러 코드들
+        if status in ["020", "021"] or "한도" in message or "limit" in message.lower():
+            return True
+    return False
+
 def fetch_execs(key, corp_code, year, rpt):
     try:
         payload = {
@@ -178,32 +224,86 @@ def fetch_execs(key, corp_code, year, rpt):
             "bsns_year": str(year),
             "reprt_code": rpt
         }
-        data = session.get(
+        
+        # API 호출 카운트 증가
+        if 'api_call_count' not in st.session_state:
+            st.session_state.api_call_count = 0
+        st.session_state.api_call_count += 1
+        
+        response = session.get(
             "https://opendart.fss.or.kr/api/exctvSttus.json",
             params=payload, timeout=20
-        ).json()
+        )
+        
+        data = response.json()
+        
+        # API 한도 초과 체크
+        if check_api_limit_error(data):
+            return [], "API_LIMIT_EXCEEDED"
+        
         if data.get("status") != "000":
             return [], data.get("message")
+            
         return data.get("list", []), None
+        
     except Exception as e:
         return [], str(e)
+
+# ---- 이메일 발송 함수 ----
+def send_email(to_email, subject, body, attachment_bytes=None, filename=None):
+    try:
+        from_email = st.secrets["smtp"]["sender_email"]
+        from_pwd   = st.secrets["smtp"]["sender_password"]
+        
+        msg = MIMEMultipart()
+        msg['From'] = from_email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, "plain", 'utf-8'))
+        
+        if attachment_bytes and filename:
+            part = MIMEApplication(attachment_bytes)
+            part.add_header('Content-Disposition', 'attachment', filename=filename)
+            msg.attach(part)
+        
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(from_email, from_pwd)
+            server.send_message(msg)
+        
+        return True, "메일 발송 성공"
+    except Exception as e:
+        return False, f"메일 발송 실패: {str(e)}"
 
 # ---- 진행률 바/진행상태 ----
 prog_placeholder = st.empty()
 status_placeholder = st.empty()
+api_status_placeholder = st.empty()
 
 # ---- 모니터링 수행 (Main) ----
-if st.session_state.get("running", False):
-    job_id = datetime.now(KST).strftime("%Y%m%d-%H%M%S")
-    ts0 = datetime.now(KST).isoformat()
-    jobs_ws.append_row([job_id, recipient, ts0, "running"])
+if st.session_state.get("running", False) or st.session_state.get("resume_job_id"):
+    
+    # 이어받기 모드인지 확인
+    is_resume = bool(st.session_state.get("resume_job_id"))
+    
+    if is_resume:
+        job_id = st.session_state.resume_job_id
+        st.info(f"🔄 작업 {job_id} 이어받기 시작...")
+        # 기존 작업 상태를 running으로 변경
+        job_row = jobs_ws.find(job_id, in_column=1)
+        if job_row:
+            jobs_ws.update_cell(job_row.row, 4, "running")
+    else:
+        job_id = datetime.now(KST).strftime("%Y%m%d-%H%M%S")
+        ts0 = datetime.now(KST).isoformat()
+        jobs_ws.append_row([job_id, recipient, ts0, "running"])
 
     with st.spinner("회사 목록 로드 중…"):
         corps, corp_err = load_corp_list(corp_key)
         if not corps:
             st.session_state.running = False
             st.error(f"회사 목록 로드 실패: {corp_err}")
-            jobs_ws.append_row([job_id, recipient, datetime.now(KST).isoformat(), "failed"])
+            if not is_resume:
+                jobs_ws.append_row([job_id, recipient, datetime.now(KST).isoformat(), "failed"])
             st.stop()
 
     kws = [w.strip() for w in keywords.split(",") if w.strip()]
@@ -212,30 +312,84 @@ if st.session_state.get("running", False):
         if ((c["stock_code"] and "상장사" in listing)
             or (not c["stock_code"] and "비상장사" in listing))
     ]
+    
     targets = [
         (c, y, r)
         for c in all_c
         for y in range(start_y, end_y+1)
         for r in sel_reports
     ]
+    
     N = len(targets)
     st.success(f"총 호출 대상: {N:,}건")
+    
     results = []
     start_time = datetime.now()
+    api_limit_hit = False
+    
     for i, (corp, y, rpt) in enumerate(targets, 1):
-        if not st.session_state.get("running", False):
+        if not st.session_state.get("running", False) and not is_resume:
             break
+            
+        # API 호출 상태 표시
+        api_status_placeholder.markdown(
+            f"<div class='api-limit-warning'>"
+            f"📊 API 호출 횟수: {st.session_state.get('api_call_count', 0):,} / 20,000 (일일 한도)"
+            f"</div>", 
+            unsafe_allow_html=True
+        )
+        
         rows, err = fetch_execs(corp_key, corp["corp_code"], y, rpt)
+        
+        # API 한도 초과 감지
+        if err == "API_LIMIT_EXCEEDED":
+            api_limit_hit = True
+            st.session_state.running = False
+            
+            # 현재까지의 진행 상황 저장
+            prog_ws.append_row([
+                job_id, f"{i-1}/{N}", f"{start_y}-{end_y}", 
+                ",".join(REPORTS[r] for r in sel_reports), 
+                datetime.now(KST).isoformat(), len(results)
+            ])
+            
+            # 작업 상태를 stopped로 변경
+            job_row = jobs_ws.find(job_id, in_column=1)
+            if job_row:
+                jobs_ws.update_cell(job_row.row, 4, "stopped")
+            
+            st.error("🚫 API 일일 한도(20,000회) 초과! 다른 API 키를 선택하여 이어받기를 진행하세요.")
+            st.markdown(
+                "<div class='api-limit-warning'>"
+                f"⚠️ <b>API 한도 초과 안내</b><br>"
+                f"• 현재까지 처리: {i-1:,}/{N:,}건<br>"
+                f"• 매칭된 결과: {len(results):,}건<br>"
+                f"• 다른 API 키로 변경 후 '이어받기' 버튼을 클릭하세요."
+                "</div>", 
+                unsafe_allow_html=True
+            )
+            break
+        
+        if err and err != "API_LIMIT_EXCEEDED":
+            continue
+            
+        # 진행률 및 상태 업데이트
         elapsed = (datetime.now() - start_time).total_seconds()
-        speed = i / elapsed if elapsed else 1
+        speed = i / elapsed if elapsed > 0 else 1
         eta = int((N-i) / speed) if speed > 0 else 0
-        prog_placeholder.progress(i/N, text=f"{i:,}/{N:,} ({i/N*100:.0f}%) · 예상 남은 시간 {eta//60}분 {eta%60}초")
+        
+        prog_placeholder.progress(
+            i/N, 
+            text=f"{i:,}/{N:,} ({i/N*100:.0f}%) · 예상 남은 시간 {eta//60}분 {eta%60}초"
+        )
+        
         status_placeholder.markdown(
             f"<span style='color:#222;font-size:17px;font-weight:600;'>"
-            f"{corp['corp_name']} · {y}년 · {REPORTS[rpt]}</span>", unsafe_allow_html=True
+            f"{corp['corp_name']} · {y}년 · {REPORTS[rpt]}</span>", 
+            unsafe_allow_html=True
         )
-        if err:
-            continue
+        
+        # 결과 수집
         for r in rows:
             mc = r.get("main_career", "")
             if any(k in mc for k in kws):
@@ -249,54 +403,125 @@ if st.session_state.get("running", False):
                     "주요경력":   mc,
                     "매칭키워드": ",".join([k for k in kws if k in mc])
                 })
-    st.session_state.running = False
-    prog_placeholder.progress(1.0, text=f"전체 조회 완료!")
+        
+        # 잠시 쉬기 (API 호출 제한 준수)
+        time.sleep(0.1)
+    
+    # API 한도 초과가 아닌 경우에만 완료 처리
+    if not api_limit_hit:
+        st.session_state.running = False
+        prog_placeholder.progress(1.0, text=f"전체 조회 완료!")
+        
+        # 완료 상태 업데이트
+        ts1 = datetime.now(KST).isoformat()
+        prog_ws.append_row([
+            job_id, N, f"{start_y}-{end_y}", 
+            ",".join(REPORTS[r] for r in sel_reports), 
+            ts1, len(results)
+        ])
+        
+        status = "completed"
+        job_row = jobs_ws.find(job_id, in_column=1)
+        if job_row:
+            jobs_ws.update_cell(job_row.row, 4, status)
 
-    # --- 결과 표시/다운로드/메일발송 ---
-    ts1 = datetime.now(KST).isoformat()
-    prog_ws.append_row([job_id, N, f"{start_y}-{end_y}", ",".join(REPORTS[r] for r in sel_reports), ts1, len(results)])
-    status = "completed" if i == N else "stopped"
-    r = jobs_ws.find(job_id, in_column=1)
-    jobs_ws.update_cell(r.row, 4, status)
-
+    # --- 결과 처리 (완료 또는 중단 모두) ---
     df = pd.DataFrame(results)
-    if df.empty:
-        st.info("🔍 매칭 결과 없음. 메일 미발송.")
-    else:
+    
+    if df.empty and not api_limit_hit:
+        st.info("🔍 매칭 결과 없음.")
+        # 빈 결과도 메일로 알림
+        email_subject = f"[DART] {start_y}-{end_y}년 {','.join(REPORTS[r] for r in sel_reports)} 모니터링 결과 (결과 없음)"
+        email_body = f"""
+작업ID: {job_id}
+시작시간: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}
+검색 키워드: {keywords}
+검색 범위: {start_y}-{end_y}년
+보고서 종류: {', '.join(REPORTS[r] for r in sel_reports)}
+총 호출 건수: {st.session_state.get('api_call_count', 0):,}회
+매칭 결과: 0건
+
+검색 조건에 맞는 결과가 없습니다.
+"""
+        success, msg = send_email(recipient, email_subject, email_body)
+        if success:
+            st.success(f"결과 없음 알림을 {recipient}로 발송했습니다.")
+        else:
+            st.error(f"메일 발송 실패: {msg}")
+            
+    elif len(df) > 0:
         st.success(f"총 {len(df):,}건 매칭 완료")
         st.dataframe(df, use_container_width=True)
+        
+        # Excel 파일 생성
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
-            df.to_excel(w, index=False, sheet_name="Sheet1")
-
+            df.to_excel(w, index=False, sheet_name="DART_Results")
+        excel_data = buf.getvalue()
+        
+        # 다운로드 버튼
         st.download_button(
-            "📥 XLSX 다운로드", data=buf.getvalue(),
+            "📥 XLSX 다운로드", 
+            data=excel_data,
             file_name=f"dart_results_{job_id}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        
+        # **핵심: 자동 메일 발송**
+        email_subject = f"[DART] {start_y}-{end_y}년 {','.join(REPORTS[r] for r in sel_reports)} 모니터링 결과"
+        
+        status_text = "완료" if not api_limit_hit else "일시중단 (API 한도 초과)"
+        
+        email_body = f"""
+작업ID: {job_id}
+작업 상태: {status_text}
+시작시간: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}
+검색 키워드: {keywords}
+검색 범위: {start_y}-{end_y}년
+보고서 종류: {', '.join(REPORTS[r] for r in sel_reports)}
+총 호출 건수: {st.session_state.get('api_call_count', 0):,}회
+매칭 결과: {len(results):,}건
 
-        if st.button("📧 결과 메일 발송"):
-            send_email(
-                to_email=recipient,
-                subject=f"[DART Monitor {job_id}] 결과",
-                body=(f"작업ID: {job_id}\n시작: {ts0}\n종료: {ts1}\n총 호출: {N:,}회\n매칭: {len(results):,}건"),
-                attachment_bytes=buf.getvalue(),
-                filename=f"dart_results_{job_id}.xlsx"
+{'첨부된 Excel 파일을 확인하세요.' if len(results) > 0 else ''}
+{'API 한도 초과로 작업이 중단되었습니다. 다른 API 키로 이어받기를 진행하세요.' if api_limit_hit else ''}
+"""
+        
+        # 자동 메일 발송
+        success, msg = send_email(
+            to_email=recipient,
+            subject=email_subject,
+            body=email_body,
+            attachment_bytes=excel_data,
+            filename=f"dart_results_{job_id}.xlsx"
+        )
+        
+        if success:
+            st.markdown(
+                f"<div class='success-box'>"
+                f"✅ <b>결과가 자동으로 {recipient}에게 발송되었습니다!</b><br>"
+                f"📧 제목: {email_subject}"
+                f"</div>", 
+                unsafe_allow_html=True
             )
-            st.success(f"결과를 {recipient} 로 발송했습니다.")
+        else:
+            st.error(f"❌ 자동 메일 발송 실패: {msg}")
+            
+            # 수동 발송 버튼 제공
+            if st.button("📧 수동 메일 발송 재시도"):
+                success2, msg2 = send_email(
+                    to_email=recipient,
+                    subject=email_subject,
+                    body=email_body,
+                    attachment_bytes=excel_data,
+                    filename=f"dart_results_{job_id}.xlsx"
+                )
+                if success2:
+                    st.success(f"수동 메일 발송 성공: {recipient}")
+                else:
+                    st.error(f"수동 메일 발송도 실패: {msg2}")
 
-# ---- 이메일 발송 함수 ----
-def send_email(to_email, subject, body, attachment_bytes, filename):
-    from_email = st.secrets["smtp"]["sender_email"]
-    from_pwd   = st.secrets["smtp"]["sender_password"]
-    msg = MIMEMultipart()
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, "plain"))
-    part = MIMEApplication(attachment_bytes)
-    part.add_header('Content-Disposition', 'attachment', filename=filename)
-    msg.attach(part)
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-        server.login(from_email, from_pwd)
-        server.send_message(msg)
+    # 세션 정리
+    if 'resume_job_id' in st.session_state:
+        del st.session_state.resume_job_id
+    if 'resume_data' in st.session_state:
+        del st.session_state.resume_data
