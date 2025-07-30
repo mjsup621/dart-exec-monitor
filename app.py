@@ -81,28 +81,35 @@ if recent_apis:
 api_labels = [x[0] for x in api_presets]
 api_keys_list = [x[1] for x in api_presets]
 
-# ---- 프리셋 3개씩 2줄 라디오 버튼 ----
+# ---- 프리셋 API 키 선택 (한 개만 선택 가능) ----
 col_api_left, col_api_right = st.columns([1,3])
 with col_api_left:
-    st.markdown("<div class='api-label'>프리셋 API KEY<br>(한 번에 하나 선택)</div>", unsafe_allow_html=True)
-    col_api_row1, col_api_row2 = st.columns(2)
-    with col_api_row1:
-        selected1 = st.radio("", api_labels[:3], index=0, key="api_preset_row1")
-    with col_api_row2:
-        selected2 = st.radio("", api_labels[3:], key="api_preset_row2")
-
-    # 두 줄 중 선택된 API 가져오기
-    selected_preset = selected1 if selected1 != api_labels[0] else selected2
-    api_key_selected = dict(api_presets)[selected_preset] if selected_preset in dict(api_presets) else api_presets[0][1]
+    st.markdown("<div class='api-label'>프리셋 API KEY<br>(한 개만 선택)</div>", unsafe_allow_html=True)
+    
+    # 단일 라디오 버튼으로 모든 API 옵션 표시
+    selected_preset = st.radio(
+        "", 
+        options=api_labels, 
+        index=0, 
+        key="api_preset_single"
+    )
+    
+    api_key_selected = dict(api_presets)[selected_preset]
 
 with col_api_right:
-    st.markdown("<div class='api-label'>API Key 직접 입력<br><span style='font-size:13px;color:#888;'>(값 입력시 프리셋 무시, 한 개만 적용)</span></div>", unsafe_allow_html=True)
+    st.markdown("<div class='api-label'>API Key 직접 입력<br><span style='font-size:13px;color:#888;'>(입력 시 프리셋 무시됨)</span></div>", unsafe_allow_html=True)
     api_key_input = st.text_area(
-        "", value="", height=40, placeholder="복사/붙여넣기 (한 개만 적용)"
+        "", value="", height=40, placeholder="API 키를 직접 입력하세요 (한 개만)"
     )
 
+# API 키 최종 결정 로직: 직접 입력이 있으면 프리셋 무시
 api_keys = [k.strip() for k in api_key_input.replace(",", "\n").splitlines() if k.strip()]
-corp_key = api_keys[0] if api_keys else api_key_selected
+if api_keys:
+    corp_key = api_keys[0]  # 직접 입력된 첫 번째 키 사용
+    st.info(f"✅ 직접 입력 API 사용: `{corp_key[:8]}...{corp_key[-8:]}`")
+else:
+    corp_key = api_key_selected  # 프리셋에서 선택된 키 사용
+    st.info(f"✅ 프리셋 API 사용: **{selected_preset}** (`{corp_key[:8]}...{corp_key[-8:]}`)")
 
 # ---- 검색 폼 ----
 def focus_email():
@@ -274,6 +281,38 @@ def send_email(to_email, subject, body, attachment_bytes=None, filename=None):
     except Exception as e:
         return False, f"메일 발송 실패: {str(e)}"
 
+# ---- 이전 결과 표시 (새 작업 시작 전에도 보여주기) ----
+if 'monitoring_results' in st.session_state and st.session_state.monitoring_results:
+    st.markdown("---")
+    st.markdown("### 📊 이전 검색 결과")
+    
+    prev_df = pd.DataFrame(st.session_state.monitoring_results)
+    st.success(f"💾 저장된 결과: {len(prev_df):,}건 (작업ID: {st.session_state.get('current_job_id', 'Unknown')})")
+    st.dataframe(prev_df, use_container_width=True)
+    
+    # 이전 결과 다운로드 버튼 (항상 사용 가능)
+    prev_buf = io.BytesIO()
+    with pd.ExcelWriter(prev_buf, engine="openpyxl") as w:
+        prev_df.to_excel(w, index=False, sheet_name="DART_Results")
+    prev_excel_data = prev_buf.getvalue()
+    
+    col_download, col_clear = st.columns([1, 1])
+    with col_download:
+        st.download_button(
+            "📥 저장된 결과 다운로드", 
+            data=prev_excel_data,
+            file_name=f"dart_results_{st.session_state.get('current_job_id', 'saved')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_saved_results"
+        )
+    with col_clear:
+        if st.button("🗑️ 저장된 결과 삭제", key="clear_saved_results"):
+            st.session_state.monitoring_results = []
+            if 'current_job_id' in st.session_state:
+                del st.session_state.current_job_id
+            st.success("저장된 결과가 삭제되었습니다.")
+            st.rerun()
+
 # ---- 진행률 바/진행상태 ----
 prog_placeholder = st.empty()
 status_placeholder = st.empty()
@@ -323,7 +362,18 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
     N = len(targets)
     st.success(f"총 호출 대상: {N:,}건")
     
-    results = []
+    # 결과를 세션 상태에 저장 (다운로드 후에도 유지)
+    if 'monitoring_results' not in st.session_state:
+        st.session_state.monitoring_results = []
+    if 'current_job_id' not in st.session_state:
+        st.session_state.current_job_id = job_id
+    
+    # 새 작업 시작 시 이전 결과 초기화
+    if st.session_state.current_job_id != job_id:
+        st.session_state.monitoring_results = []
+        st.session_state.current_job_id = job_id
+    
+    results = st.session_state.monitoring_results.copy()
     start_time = datetime.now()
     api_limit_hit = False
     
@@ -389,11 +439,11 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
             unsafe_allow_html=True
         )
         
-        # 결과 수집
+        # 결과 수집 및 세션 상태에 저장
         for r in rows:
             mc = r.get("main_career", "")
             if any(k in mc for k in kws):
-                results.append({
+                new_result = {
                     "회사명":     corp["corp_name"],
                     "종목코드":   corp["stock_code"] or "비상장",
                     "사업연도":   y,
@@ -402,7 +452,9 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
                     "직위":       r.get("ofcps",""),
                     "주요경력":   mc,
                     "매칭키워드": ",".join([k for k in kws if k in mc])
-                })
+                }
+                results.append(new_result)
+                st.session_state.monitoring_results.append(new_result)
         
         # 잠시 쉬기 (API 호출 제한 준수)
         time.sleep(0.1)
@@ -426,7 +478,9 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
             jobs_ws.update_cell(job_row.row, 4, status)
 
     # --- 결과 처리 (완료 또는 중단 모두) ---
-    df = pd.DataFrame(results)
+    # 최종 결과는 세션에서 가져오기
+    final_results = st.session_state.monitoring_results
+    df = pd.DataFrame(final_results)
     
     if df.empty and not api_limit_hit:
         st.info("🔍 매칭 결과 없음.")
