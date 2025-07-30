@@ -37,21 +37,48 @@ with st.container():
     """, unsafe_allow_html=True)
     st.markdown("### <span style='color:#222;font-weight:600;'>DART 임원 <span style='color:#007aff'>‘주요경력’</span> 모니터링 서비스</span>", unsafe_allow_html=True)
 
-# --- API KEY 입력 (복수 지원, 자동 분배) ---
-st.markdown("**🔑 DART API Key (여러 개 입력, 한 줄에 하나씩 or 쉼표로 구분)**")
-api_keys_input = st.text_area(
-    "",  # 라벨X
-    value="\n".join([
-        "eeb883965e882026589154074cddfc695330693c",
-        "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176",
-        "5e75506d60b4ab3f325168019bcacf364cf4937e",
-        "6c64f7efdea057881deb91bbf3aaa5cb8b03d394",
-        "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8",
-    ])
-)
-api_keys = [k.strip() for line in api_keys_input.splitlines() for k in line.split(",") if k.strip()]
+# --- API Key 프리셋 + 복수 선택 + 직접입력/추가 ---
+st.markdown("**🔑 DART API Key (프리셋 복수선택 + 직접입력 추가/수정)**")
+preset_keys = [
+    ("API 1", "eeb883965e882026589154074cddfc695330693c"),
+    ("API 2", "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176"),
+    ("API 3", "5e75506d60b4ab3f325168019bcacf364cf4937e"),
+    ("API 4", "6c64f7efdea057881deb91bbf3aaa5cb8b03d394"),
+    ("API 5", "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8"),
+]
+
+colA, colB = st.columns([1,2])
+
+with colA:
+    checked = st.multiselect(
+        "프리셋 API KEY (복수 선택)",
+        [f"{name}: {val[-6:]}" for name, val in preset_keys],
+        default=[f"API 1: {preset_keys[0][1][-6:]}"]
+    )
+
+with colB:
+    user_input = st.text_area(
+        "API Key 직접 입력 (여러 개 입력 가능, 쉼표/줄바꿈)",
+        value="",
+        help="추가 입력시 여러개 가능. 프리셋과 합쳐져 사용됩니다."
+    )
+
+# 프리셋에서 선택된 것만 추출
+selected_preset_keys = [
+    val for name, val in preset_keys
+    if f"{name}: {val[-6:]}" in checked
+]
+
+# 직접 입력도 리스트로 파싱
+entered_keys = [k.strip() for line in user_input.splitlines() for k in line.split(",") if k.strip()]
+
+# 최종 리스트 (중복 제거)
+api_keys = list(dict.fromkeys(selected_preset_keys + entered_keys))  # 순서유지, 중복제거
+
 if not api_keys:
+    st.warning("최소 1개 이상의 API Key를 선택 또는 입력해야 합니다.")
     st.stop()
+
 corp_key = api_keys[0]
 
 # --- 이메일 입력 (자동 포커스 & 형식 검증) ---
