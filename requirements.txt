@@ -1,5 +1,6 @@
 streamlit
-requests
+gspread
+google-auth
 pandas
-lxml
+requests
 openpyxl
