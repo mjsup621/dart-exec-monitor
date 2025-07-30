@@ -1,13 +1,13 @@
 import streamlit as st
 import json
-import requests, zipfile, io, xml.etree.ElementTree as ET, pandas as pd, json
+import requests, zipfile, io, xml.etree.ElementTree as ET, pandas as pd
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ─── 구글 시트 인증: service_account.json 대신 secrets에서 불러오기 ──────────────
+# --- Google Sheets 인증 ---
 service_account_info = json.loads(st.secrets["SERVICE_ACCOUNT_JSON"])
 creds = Credentials.from_service_account_info(
     service_account_info,
@@ -19,10 +19,22 @@ sh = gc.open_by_key(SPREADSHEET_ID)
 jobs_ws = sh.worksheet("DART_Jobs")
 prog_ws = sh.worksheet("DART_Progress")
 
-# ─── Streamlit UI ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="DART 임원 주요경력 모니터링", layout="wide")
-st.title("📊 DART 임원 ‘주요경력’ 모니터링 서비스")
+# --- UI 헤더 및 스타일 ---
+st.set_page_config(page_title="DART 임원 모니터링", layout="wide", initial_sidebar_state="collapsed")
 
+with st.container():
+    st.markdown("""
+    <style>
+        .stApp { background: #f8f9fa !important; font-family: 'SF Pro Display', 'Apple SD Gothic Neo', 'Pretendard', 'Inter', sans-serif;}
+        .stButton button, .stTextInput input, .stRadio > div {border-radius: 12px !important;}
+        .stProgress > div > div {background-color: #007aff !important;} /* 애플 블루 */
+        .stTextInput input {font-size: 17px !important; background: #fff;}
+        .stMarkdown, .stDataFrame, .stMultiselect, .stSlider {font-size: 17px;}
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown("### <span style='color:#222;font-weight:600;'>DART 임원 <span style='color:#007aff'>‘주요경력’</span> 모니터링 서비스</span>", unsafe_allow_html=True)
+
+# --- API Key 선택 ---
 api_options = [
     ("API 1", "eeb883965e882026589154074cddfc695330693c"),
     ("API 2", "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176"),
@@ -30,38 +42,38 @@ api_options = [
     ("API 4", "6c64f7efdea057881deb91bbf3aaa5cb8b03d394"),
     ("API 5", "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8"),
 ]
-colA, colB = st.columns([2,4])
-api_select = colA.radio("🗝️ DART API KEY 선택", [x[0] for x in api_options])
+colA, colB = st.columns([1,3])
+api_select = colA.radio("DART API KEY", [x[0] for x in api_options], horizontal=True)
 api_key_default = dict(api_options)[api_select]
-api_key_input = colB.text_input("🔑 DART API Key 직접 입력 (선택)", value=api_key_default)
+api_key_input = colB.text_input("API Key 직접 입력 (쉼표구분/여러개 가능)", value=api_key_default)
 api_keys = [k.strip() for k in api_key_input.split(",") if k.strip()]
-corp_key = api_keys[0]  # corpCode.xml용
+corp_key = api_keys[0]
 
-recipient = st.text_input("📧 결과 수신 이메일", value="")
-keywords  = st.text_input("🔍 키워드 (쉼표로 구분)", "이촌,삼정,안진")
+# --- 검색 파라미터 입력 ---
+recipient = st.text_input("결과 수신 이메일", value="")
+keywords  = st.text_input("키워드 (쉼표구분)", "이촌,삼정,안진")
 REPORTS = {
     "11013":"1분기보고서","11012":"반기보고서",
     "11014":"3분기보고서","11011":"사업보고서(연간)"
 }
 sel_reports = st.multiselect(
-    "📑 보고서 종류",
-    options=list(REPORTS.keys()),
+    "보고서 종류", options=list(REPORTS.keys()),
     format_func=lambda c: f"{REPORTS[c]} ({c})",
     default=["11011"]
 )
-listing = st.multiselect("🏷️ 회사 구분", ["상장사","비상장사"], default=["상장사"])
+listing = st.multiselect("회사 구분", ["상장사","비상장사"], default=["상장사"])
 cy = datetime.now().year
-start_y, end_y = st.slider("📅 사업연도 범위", 2000, cy, (cy-1, cy))
+start_y, end_y = st.slider("사업연도 범위", 2000, cy, (cy-1, cy), label_visibility="visible")
 col1, col2 = st.columns(2)
-run, stop = col1.button("▶️ 모니터링 시작"), col2.button("⏹️ 중지")
+run, stop = col1.button("▶️ 모니터링 시작", use_container_width=True), col2.button("⏹️ 중지", use_container_width=True)
 
-# ─── HTTP 세션 + Retry ──────────────────────────────────────────────────────────
+# --- HTTP 세션 + Retry ---
 session = requests.Session()
 session.mount("https://", HTTPAdapter(
     max_retries=Retry(total=2, backoff_factor=1, status_forcelist=[500,502,503,504])
 ))
 
-# ─── corpCode.xml 로드 (캐시) ────────────────────────────────────────────────────
+# --- corpCode.xml 로드 ---
 @st.cache_data(show_spinner=False)
 def load_corp_list(key):
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
@@ -85,7 +97,7 @@ def load_corp_list(key):
     except Exception as e:
         return None, str(e)
 
-# ─── 임원현황 API 호출 ───────────────────────────────────────────────────────────
+# --- 임원현황 API 호출 ---
 def fetch_execs(key, corp_code, year, rpt):
     try:
         payload = {
@@ -104,7 +116,7 @@ def fetch_execs(key, corp_code, year, rpt):
     except Exception as e:
         return [], str(e)
 
-# ─── 모니터링 제어 상태 ──────────────────────────────────────────────────────────
+# --- 모니터링 상태 관리 ---
 if "running" not in st.session_state:
     st.session_state.running = False
 
@@ -116,9 +128,14 @@ if run:
 
 if stop:
     st.session_state.running = False
-    st.warning("중지되었습니다.")
+    st.info("중지되었습니다.")
 
-# ─── 모니터링 수행 ──────────────────────────────────────────────────────────────
+# --- 진행률/상태 한줄 표시 영역 ---
+prog_placeholder = st.empty()         # 진행률 Progress Bar
+status_placeholder = st.empty()       # 한 줄 상태(회사/연도/보고서/진행률)
+err_placeholder = st.empty()          # 오류·에러 메시지
+
+# --- 모니터링 수행 ---
 if st.session_state.running:
     job_id, ts0 = datetime.now().strftime("%Y%m%d-%H%M%S"), datetime.now().isoformat()
     jobs_ws.append_row([job_id, recipient, ts0, "running"])
@@ -127,7 +144,7 @@ if st.session_state.running:
         corps, corp_err = load_corp_list(corp_key)
         if not corps:
             st.session_state.running = False
-            st.error(f"회사 목록 로드 실패: {corp_err}")
+            err_placeholder.error(f"회사 목록 로드 실패: {corp_err}")
             jobs_ws.append_row([job_id, recipient, datetime.now().isoformat(), "failed"])
             st.stop()
 
@@ -144,19 +161,26 @@ if st.session_state.running:
         for r in sel_reports
     ]
     N = len(targets)
-    st.success(f"✅ 총 호출 대상: **{N:,}**건")
-    prog = st.progress(0)
-
+    st.success(f"총 호출 대상: {N:,}건")
     results = []
-    for i, (corp, y, rpt) in enumerate(targets,1):
+
+    # --- 진행률 및 상태 한줄 표시 메인루프 ---
+    for i, (corp, y, rpt) in enumerate(targets, 1):
         if not st.session_state.running:
             break
         rows, err = fetch_execs(corp_key, corp["corp_code"], y, rpt)
         if err:
-            st.warning(f"{y}-{rpt} {corp['corp_name']} 오류: {err}")
+            # 에러는 아래쪽에 아주 짧게만 표시
+            err_placeholder.warning(f"{corp['corp_name']} {y}-{REPORTS[rpt]}: {err}", icon="⚠️")
             continue
+        # 상태 표시 한 줄만 갱신 (현재 진행상황/회사/연도/보고서)
+        status_placeholder.markdown(
+            f"<span style='color:#666;font-size:17px;'>"
+            f"[{i}/{N}] <b style='color:#007aff'>{corp['corp_name']}</b> · {y}년 · {REPORTS[rpt]} 검색 중…"
+            f"</span>", unsafe_allow_html=True
+        )
         for r in rows:
-            mc = r.get("main_career","")
+            mc = r.get("main_career", "")
             if any(k in mc for k in kws):
                 results.append({
                     "회사명":     corp["corp_name"],
@@ -168,10 +192,12 @@ if st.session_state.running:
                     "주요경력":   mc,
                     "매칭키워드": ",".join([k for k in kws if k in mc])
                 })
-        prog.progress(i/N)
-    prog.progress(1.0)
+        prog_placeholder.progress(i/N)
 
-    # 진행 요약
+    prog_placeholder.progress(1.0)
+    status_placeholder.success("✅ 전체 조회 완료!")
+
+    # --- 결과 표시/저장 ---
     ts1 = datetime.now().isoformat()
     prog_ws.append_row([
         job_id, N, f"{start_y}-{end_y}",
@@ -186,16 +212,12 @@ if st.session_state.running:
     if df.empty:
         st.info("🔍 매칭된 결과물이 없습니다. 메일이 발송되지 않습니다.")
     else:
-        st.success(f"총 **{len(df):,}**건 매칭 완료")
-        st.dataframe(df)
+        st.success(f"총 {len(df):,}건 매칭 완료")
+        st.dataframe(df, use_container_width=True)
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
-            df.to_excel(w,index=False,sheet_name="Sheet1")
-
-        # 이메일 발송
-        from_email = st.secrets["smtp"]["sender_email"]
-        from_pwd   = st.secrets["smtp"]["sender_password"]
-        # send_email() 함수는 아래에서 따로 정의(구현)해줘야 함.
+            df.to_excel(w, index=False, sheet_name="Sheet1")
+        # 이메일 발송 함수는 이전 코드와 동일 (send_email)
         send_email(
             to_email=recipient,
             subject=f"[DART Monitor {job_id}] 결과",
@@ -211,7 +233,7 @@ if st.session_state.running:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# ─── 이메일 발송 함수 (SMTP, Gmail 등) ─────────────────────────────
+# --- 이메일 발송 함수 (SMTP, Gmail 등) ---
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
