@@ -87,7 +87,7 @@ def email_is_valid(email):
 
 recipient = st.text_input("📧 결과 수신 이메일", value="", key="recipient")
 if st.session_state.get("focus_email", False):
-    st.experimental_rerun()
+    st.rerun()
     st.session_state.focus_email = False
 
 if "focus_email" not in st.session_state:
