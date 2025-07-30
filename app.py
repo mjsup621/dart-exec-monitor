@@ -1,6 +1,6 @@
 import streamlit as st
-import json
-import requests, zipfile, io, xml.etree.ElementTree as ET, pandas as pd, re
+import json, io, os
+import requests, zipfile, xml.etree.ElementTree as ET, pandas as pd
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -11,7 +11,21 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-# --- Google Sheets 인증 ---
+# ------------------ 스타일 (애플 UI 감성) ------------------
+st.set_page_config(page_title="DART 임원 주요경력 모니터링", layout="wide")
+st.markdown("""
+<style>
+.stApp {background: #f8f9fa !important; font-family: 'SF Pro Display','Apple SD Gothic Neo','Pretendard','Inter',sans-serif;}
+.stButton button, .stTextInput input, .stRadio > div, .stDownloadButton button {border-radius: 12px !important;}
+.stProgress > div > div {background-color: #007aff !important;}
+.stTextInput input {font-size: 17px !important;}
+.stMarkdown, .stDataFrame, .stMultiselect, .stSlider {font-size: 17px;}
+.job-badge {background:#e6f0ff;color:#0057b7;font-weight:600;border-radius:8px;padding:2px 10px;display:inline-block;margin-right:6px;}
+</style>
+""", unsafe_allow_html=True)
+st.markdown("## <span style='color:#222;font-weight:600;'>DART 임원 <span style='color:#007aff'>‘주요경력’</span> 모니터링 서비스</span>", unsafe_allow_html=True)
+
+# ------------------ 구글 시트 인증 ------------------
 service_account_info = json.loads(st.secrets["SERVICE_ACCOUNT_JSON"])
 creds = Credentials.from_service_account_info(
     service_account_info,
@@ -23,22 +37,7 @@ sh = gc.open_by_key(SPREADSHEET_ID)
 jobs_ws = sh.worksheet("DART_Jobs")
 prog_ws = sh.worksheet("DART_Progress")
 
-# --- UI/스타일 ---
-st.set_page_config(page_title="DART 임원 모니터링", layout="wide", initial_sidebar_state="collapsed")
-with st.container():
-    st.markdown("""
-    <style>
-        .stApp { background: #f8f9fa !important; font-family: 'SF Pro Display', 'Apple SD Gothic Neo', 'Pretendard', 'Inter', sans-serif;}
-        .stButton button, .stTextInput input, .stRadio > div {border-radius: 12px !important;}
-        .stProgress > div > div {background-color: #007aff !important;}
-        .stTextInput input {font-size: 17px !important; background: #fff;}
-        .stMarkdown, .stDataFrame, .stMultiselect, .stSlider {font-size: 17px;}
-    </style>
-    """, unsafe_allow_html=True)
-    st.markdown("### <span style='color:#222;font-weight:600;'>DART 임원 <span style='color:#007aff'>‘주요경력’</span> 모니터링 서비스</span>", unsafe_allow_html=True)
-
-# --- API Key 프리셋 + 복수 선택 + 직접입력/추가 ---
-st.markdown("**🔑 DART API Key (프리셋 복수선택 + 직접입력 추가/수정)**")
+# ------------------ API Key 입력 (프리셋 + 직접) ------------------
 preset_keys = [
     ("API 1", "eeb883965e882026589154074cddfc695330693c"),
     ("API 2", "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176"),
@@ -46,63 +45,26 @@ preset_keys = [
     ("API 4", "6c64f7efdea057881deb91bbf3aaa5cb8b03d394"),
     ("API 5", "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8"),
 ]
-
-colA, colB = st.columns([1,2])
-
-with colA:
-    checked = st.multiselect(
-        "프리셋 API KEY (복수 선택)",
-        [f"{name}: {val[-6:]}" for name, val in preset_keys],
-        default=[f"API 1: {preset_keys[0][1][-6:]}"]
-    )
-
-with colB:
-    user_input = st.text_area(
-        "API Key 직접 입력 (여러 개 입력 가능, 쉼표/줄바꿈)",
-        value="",
-        help="추가 입력시 여러개 가능. 프리셋과 합쳐져 사용됩니다."
-    )
-
-# 프리셋에서 선택된 것만 추출
-selected_preset_keys = [
-    val for name, val in preset_keys
-    if f"{name}: {val[-6:]}" in checked
-]
-
-# 직접 입력도 리스트로 파싱
-entered_keys = [k.strip() for line in user_input.splitlines() for k in line.split(",") if k.strip()]
-
-# 최종 리스트 (중복 제거)
-api_keys = list(dict.fromkeys(selected_preset_keys + entered_keys))  # 순서유지, 중복제거
+st.markdown("#### 🔑 DART API Key (프리셋 복수선택 + 직접입력 추가/수정)")
+cols = st.columns(6)
+api_presets = [cols[i].checkbox(f"{name}", key=f"api_{i}", value=(i in [0, 4])) for i, (name, _) in enumerate(preset_keys)]
+selected_presets = [preset_keys[i][1] for i, checked in enumerate(api_presets) if checked]
+api_keys_input = cols[5].text_area("API Key 직접 입력 (쉼표/줄바꿈 가능)", value="", height=38, key="api_input")
+direct_keys = [k.strip() for line in api_keys_input.splitlines() for k in line.split(",") if k.strip()]
+api_keys = selected_presets + direct_keys
+api_keys = list(dict.fromkeys(api_keys))  # 중복제거, 순서유지
 
 if not api_keys:
-    st.warning("최소 1개 이상의 API Key를 선택 또는 입력해야 합니다.")
+    st.warning("최소 1개 이상의 DART API KEY가 필요합니다.")
     st.stop()
 
-corp_key = api_keys[0]
-
-# --- 이메일 입력 (자동 포커스 & 형식 검증) ---
-def email_is_valid(email):
-    return bool(re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email))
-
-recipient = st.text_input("📧 결과 수신 이메일", value="", key="recipient")
-if st.session_state.get("focus_email", False):
-    st.rerun()
-    st.session_state.focus_email = False
-
-if "focus_email" not in st.session_state:
-    st.session_state.focus_email = False
-
-# --- 나머지 파라미터 입력 ---
+# ------------------ 입력 파라미터 ------------------
+recipient = st.text_input("📧 결과 수신 이메일 (필수)", value="")
 keywords  = st.text_input("🔍 키워드 (쉼표구분)", "이촌,삼정,안진")
-REPORTS = {
-    "11013":"1분기보고서","11012":"반기보고서",
-    "11014":"3분기보고서","11011":"사업보고서(연간)"
-}
+REPORTS = {"11013":"1분기보고서","11012":"반기보고서","11014":"3분기보고서","11011":"사업보고서(연간)"}
 sel_reports = st.multiselect(
     "📑 보고서 종류", options=list(REPORTS.keys()),
-    format_func=lambda c: f"{REPORTS[c]} ({c})",
-    default=["11011"]
+    format_func=lambda c: f"{REPORTS[c]} ({c})", default=["11011"]
 )
 listing = st.multiselect("🏷️ 회사 구분", ["상장사","비상장사"], default=["상장사"])
 cy = datetime.now().year
@@ -110,12 +72,37 @@ start_y, end_y = st.slider("📅 사업연도 범위", 2000, cy, (cy-1, cy))
 col1, col2 = st.columns(2)
 run, stop = col1.button("▶️ 모니터링 시작", use_container_width=True), col2.button("⏹️ 중지", use_container_width=True)
 
-# --- HTTP 세션 + Retry ---
+# --- 이메일 형식 검증 ---
+def is_valid_email(email):
+    return "@" in email and "." in email and len(email) >= 6
+if run and not recipient:
+    st.warning("결과 수신 이메일을 입력해 주세요.")
+    st.session_state['focus_email'] = True
+    st.stop()
+if run and not is_valid_email(recipient):
+    st.warning("정상 이메일을 입력해 주세요. (예: user@domain.com)")
+    st.session_state['focus_email'] = True
+    st.stop()
+
+# (최신 Streamlit: email 입력에 focus 줄 수 있음)
+if st.session_state.get('focus_email'):
+    st.components.v1.html("""
+        <script>
+        setTimeout(function(){
+            const inp = window.parent.document.querySelector('input[type="text"]');
+            if(inp) { inp.focus(); }
+        }, 200);
+        </script>
+    """, height=0)
+    st.session_state['focus_email'] = False
+
+# ------------------ HTTP 세션 + Retry ------------------
 session = requests.Session()
 session.mount("https://", HTTPAdapter(
     max_retries=Retry(total=2, backoff_factor=1, status_forcelist=[500,502,503,504])
 ))
 
+# ------------------ corpCode.xml 캐싱 ------------------
 @st.cache_data(show_spinner=False)
 def load_corp_list(key):
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
@@ -139,6 +126,13 @@ def load_corp_list(key):
     except Exception as e:
         return None, str(e)
 
+# ------------------ 임원현황 API 호출 (키 순환) ------------------
+key_idx, call_cnt = 0, 0
+def get_next_key():
+    global key_idx, call_cnt
+    if call_cnt and call_cnt % 20000 == 0:
+        key_idx = (key_idx + 1) % len(api_keys)
+    return api_keys[key_idx]
 def fetch_execs(key, corp_code, year, rpt):
     try:
         payload = {
@@ -147,165 +141,85 @@ def fetch_execs(key, corp_code, year, rpt):
             "bsns_year": str(year),
             "reprt_code": rpt
         }
-        data = session.get(
+        resp = session.get(
             "https://opendart.fss.or.kr/api/exctvSttus.json",
             params=payload, timeout=20
-        ).json()
+        )
+        if resp.status_code == 429 or (resp.headers.get("X-RateLimit-Remaining") == "0"):
+            return [], "API 사용한도 초과"
+        data = resp.json()
+        if data.get("status") == "020":
+            return [], "API 사용한도 초과"
         if data.get("status") != "000":
             return [], data.get("message")
         return data.get("list", []), None
     except Exception as e:
         return [], str(e)
 
-# --- 상태 관리 ---
+# ------------------ 상태 관리 ------------------
 if "running" not in st.session_state:
     st.session_state.running = False
-if "last_results" not in st.session_state:
-    st.session_state.last_results = None
-if "last_df" not in st.session_state:
-    st.session_state.last_df = None
-if "last_jobid" not in st.session_state:
-    st.session_state.last_jobid = None
+if "results" not in st.session_state:
+    st.session_state.results = []
+if "progress_idx" not in st.session_state:
+    st.session_state.progress_idx = 0
+if "targets" not in st.session_state:
+    st.session_state.targets = []
 
-# --- 실행/중지 버튼 제어 ---
-if run:
-    if not recipient:
-        st.warning("이메일 주소를 입력하세요.")
-        st.session_state.focus_email = True
-    elif not email_is_valid(recipient):
-        st.warning("이메일 형식이 올바르지 않습니다.")
-        st.session_state.focus_email = True
-    elif not (keywords and sel_reports):
-        st.warning("키워드·보고서를 모두 입력하세요.")
-    else:
+# ---- "이어서 복구" 기능용, 이전 미완료 작업 불러오기 ----
+restore_job = None
+recent_failed = []
+try:
+    all_jobs = jobs_ws.get_all_records()
+    for row in reversed(all_jobs):
+        if row.get("status") == "stopped":
+            recent_failed.append(row)
+except: pass
+if recent_failed:
+    rj = recent_failed[0]
+    st.info(f"🔄 미완료(중단) 작업 이어받기: <span class='job-badge'>{rj['job_id']}</span> ({rj.get('user_email','')}, {rj.get('start_time','')})", unsafe_allow_html=True)
+    if st.button("▶️ 이어서 복구/재시작"):
         st.session_state.running = True
+        # targets 다시 세팅 (전체 → progress_idx 부터)
+        st.session_state.progress_idx = int(rj.get("processed_count", 0))
+        # results 재세팅 (기존 결과 복원)
+        # (예시: 로컬/DB/S3에 임시 저장된 DataFrame을 불러오는 방식도 가능. 여기선 간단화)
+        st.session_state.results = []
+        st.experimental_rerun()
 
-if stop:
-    st.session_state.running = False
-    st.info("중지되었습니다.")
-
-# --- 진행 상태/애니메이션 ---
+# ------------------ 모니터링 루프 ------------------
 prog_placeholder = st.empty()
 status_placeholder = st.empty()
-download_placeholder = st.empty()
-err_placeholder = st.empty()
+dl_placeholder = st.empty()
 
-# --- 모니터링 수행 ---
-if st.session_state.running:
-    job_id, ts0 = datetime.now().strftime("%Y%m%d-%H%M%S"), datetime.now().isoformat()
-    jobs_ws.append_row([job_id, recipient, ts0, "running"])
-    with st.spinner("회사 목록 로드 중…"):
-        corps, corp_err = load_corp_list(corp_key)
-        if not corps:
-            st.session_state.running = False
-            err_placeholder.error(f"회사 목록 로드 실패: {corp_err}")
-            jobs_ws.append_row([job_id, recipient, datetime.now().isoformat(), "failed"])
-            st.stop()
-    kws = [w.strip() for w in keywords.split(",") if w.strip()]
-    all_c = [
-        c for c in corps
-        if ((c["stock_code"] and "상장사" in listing)
-            or (not c["stock_code"] and "비상장사" in listing))
-    ]
-    targets = [
-        (c, y, r)
-        for c in all_c
-        for y in range(start_y, end_y+1)
-        for r in sel_reports
-    ]
-    N = len(targets)
-    st.success(f"총 호출 대상: {N:,}건")
-    results = []
-    key_idx = 0
-    for i, (corp, y, rpt) in enumerate(targets, 1):
-        if not st.session_state.running:
-            break
-        cur_key = api_keys[key_idx % len(api_keys)]
-        rows, err = fetch_execs(cur_key, corp["corp_code"], y, rpt)
-        if err:
-            err_placeholder.warning(f"{corp['corp_name']} {y}-{REPORTS[rpt]}: {err}", icon="⚠️")
-            # API 키 한도 초과시 자동으로 다음키 사용(없으면 멈춤)
-            if "한도" in str(err) or "제한" in str(err):
-                key_idx += 1
-                if key_idx >= len(api_keys):
-                    st.session_state.running = False
-                    err_placeholder.error("입력한 모든 API Key 한도 초과! 작업을 중단합니다.")
-                    break
-                continue
-        status_placeholder.markdown(
-            f"<span style='color:#666;font-size:17px;'>"
-            f"[{i}/{N}] <b style='color:#007aff'>{corp['corp_name']}</b> · {y}년 · {REPORTS[rpt]} 검색 중…"
-            f"</span>", unsafe_allow_html=True
-        )
-        for r in rows:
-            mc = r.get("main_career", "")
-            if any(k in mc for k in kws):
-                results.append({
-                    "회사명":     corp["corp_name"],
-                    "종목코드":   corp["stock_code"] or "비상장",
-                    "사업연도":   y,
-                    "보고서종류": REPORTS[rpt],
-                    "임원이름":   r.get("nm",""),
-                    "직위":       r.get("ofcps",""),
-                    "주요경력":   mc,
-                    "매칭키워드": ",".join([k for k in kws if k in mc])
-                })
-        prog_placeholder.progress(i/N)
-    prog_placeholder.progress(1.0)
-    status_placeholder.success("✅ 전체 조회 완료!")
-
-    ts1 = datetime.now().isoformat()
-    prog_ws.append_row([
-        job_id, N, f"{start_y}-{end_y}",
-        ",".join(REPORTS[r] for r in sel_reports),
-        ts1, len(results)
-    ])
-    status = "completed" if st.session_state.running else "stopped"
+def save_progress(results, N, job_id, ts0, ts1, recipient, status):
+    prog_ws.append_row([job_id, N, ts0, ts1, len(results), status])
     r = jobs_ws.find(job_id, in_column=1)
     jobs_ws.update_cell(r.row, 4, status)
 
+def show_download_ui(results, recipient, job_id, ts0, ts1, N):
     df = pd.DataFrame(results)
-    st.session_state.last_results = results
-    st.session_state.last_df = df
-    st.session_state.last_jobid = job_id
-
-    if df.empty:
-        st.info("🔍 매칭된 결과물이 없습니다. 메일이 발송되지 않습니다.")
-    else:
-        st.success(f"총 {len(df):,}건 매칭 완료")
-        st.dataframe(df, use_container_width=True)
+    if not df.empty:
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
             df.to_excel(w, index=False, sheet_name="Sheet1")
-        send_email(
-            to_email=recipient,
-            subject=f"[DART Monitor {job_id}] 결과",
-            body=(f"작업ID: {job_id}\n시작: {ts0}\n종료: {ts1}\n총 호출: {N:,}회\n매칭: {len(results):,}건"),
-            attachment_bytes=buf.getvalue(),
-            filename=f"dart_results_{job_id}.xlsx"
-        )
-        download_placeholder.download_button(
-            "📥 XLSX 다운로드",
+        dl_placeholder.download_button(
+            "📥 지금까지 결과 다운로드",
             data=buf.getvalue(),
             file_name=f"dart_results_{job_id}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        # 이메일 발송
+        if st.button("✉️ 지금까지 결과 메일 발송"):
+            send_email(
+                to_email=recipient,
+                subject=f"[DART Monitor {job_id}] 중간결과",
+                body=(f"작업ID: {job_id}\n시작: {ts0}\n종료: {ts1}\n총 호출: {N:,}회\n매칭: {len(results):,}건"),
+                attachment_bytes=buf.getvalue(),
+                filename=f"dart_results_{job_id}.xlsx"
+            )
+            st.success(f"결과를 {recipient} 로 발송했습니다.")
 
-# --- 실패 작업 이어받기(복구) ---
-if not st.session_state.running and st.session_state.last_df is not None:
-    st.subheader("🔄 이전 미완료 작업 결과 다운로드")
-    st.dataframe(st.session_state.last_df, use_container_width=True)
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        st.session_state.last_df.to_excel(w, index=False, sheet_name="Sheet1")
-    download_placeholder.download_button(
-        "이전 미완료결과 XLSX 다운로드",
-        data=buf.getvalue(),
-        file_name=f"dart_results_{st.session_state.last_jobid or 'last'}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-# --- 이메일 발송 함수 ---
 def send_email(to_email, subject, body, attachment_bytes, filename):
     from_email = st.secrets["smtp"]["sender_email"]
     from_pwd   = st.secrets["smtp"]["sender_password"]
@@ -320,3 +234,83 @@ def send_email(to_email, subject, body, attachment_bytes, filename):
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
         server.login(from_email, from_pwd)
         server.send_message(msg)
+
+if run or st.session_state.running:
+    if not st.session_state.running:
+        st.session_state.running = True
+        st.session_state.results = []
+        st.session_state.progress_idx = 0
+        st.session_state.targets = []
+    job_id, ts0 = datetime.now().strftime("%Y%m%d-%H%M%S"), datetime.now().isoformat()
+    if not st.session_state.targets:
+        with st.spinner("회사 목록 로드 중…"):
+            corps, corp_err = load_corp_list(api_keys[0])
+            if not corps:
+                st.session_state.running = False
+                st.error(f"회사 목록 로드 실패: {corp_err}")
+                st.stop()
+        kws = [w.strip() for w in keywords.split(",") if w.strip()]
+        all_c = [
+            c for c in corps
+            if ((c["stock_code"] and "상장사" in listing)
+                or (not c["stock_code"] and "비상장사" in listing))
+        ]
+        st.session_state.targets = [
+            (c, y, r)
+            for c in all_c
+            for y in range(start_y, end_y+1)
+            for r in sel_reports
+        ]
+    targets = st.session_state.targets
+    N = len(targets)
+    st.success(f"총 호출 대상: {N:,}건")
+    prog_bar = prog_placeholder.progress(st.session_state.progress_idx / N if N else 0)
+    for i in range(st.session_state.progress_idx, N):
+        corp, y, rpt = targets[i]
+        key = get_next_key()
+        rows, err = fetch_execs(key, corp["corp_code"], y, rpt)
+        if err:
+            if "사용한도" in err:
+                st.warning(f"API({key[:7]+'..'}) 사용한도 소진! 다음 API로 교체, 혹은 중지/이어받기", icon="⛔")
+                show_download_ui(st.session_state.results, recipient, job_id, ts0, datetime.now().isoformat(), N)
+                save_progress(st.session_state.results, N, job_id, ts0, datetime.now().isoformat(), recipient, "stopped")
+                st.session_state.running = False
+                st.session_state.progress_idx = i
+                break
+            else:
+                status_placeholder.warning(f"{corp['corp_name']} {y}-{REPORTS[rpt]}: {err}", icon="⚠️")
+                continue
+        status_placeholder.markdown(
+            f"<span style='color:#666;font-size:17px;'>"
+            f"[{i+1}/{N}] <b style='color:#007aff'>{corp['corp_name']}</b> · {y}년 · {REPORTS[rpt]} 검색 중…"
+            f"</span>", unsafe_allow_html=True
+        )
+        for r in rows:
+            mc = r.get("main_career", "")
+            if any(k in mc for k in kws):
+                st.session_state.results.append({
+                    "회사명":     corp["corp_name"],
+                    "종목코드":   corp["stock_code"] or "비상장",
+                    "사업연도":   y,
+                    "보고서종류": REPORTS[rpt],
+                    "임원이름":   r.get("nm",""),
+                    "직위":       r.get("ofcps",""),
+                    "주요경력":   mc,
+                    "매칭키워드": ",".join([k for k in kws if k in mc])
+                })
+        prog_bar.progress((i+1)/N)
+        st.session_state.progress_idx = i+1
+    # 작업 완료
+    ts1 = datetime.now().isoformat()
+    save_progress(st.session_state.results, N, job_id, ts0, ts1, recipient, "completed" if st.session_state.running else "stopped")
+    if st.session_state.running:
+        show_download_ui(st.session_state.results, recipient, job_id, ts0, ts1, N)
+        st.success("✅ 전체 조회 완료!")
+        st.session_state.running = False
+        st.session_state.progress_idx = 0
+        st.session_state.targets = []
+    else:
+        st.info("🔴 작업이 중지되었습니다. 지금까지의 결과를 다운로드/메일발송 하실 수 있습니다.")
+
+# (끝) - 전체 복사해서 사용 가능
+
