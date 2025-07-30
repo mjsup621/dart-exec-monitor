@@ -11,7 +11,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-# ---- 구글시트 인증 ----
+# --- Google Sheets 인증 ---
 service_account_info = json.loads(st.secrets["SERVICE_ACCOUNT_JSON"])
 creds = Credentials.from_service_account_info(
     service_account_info,
@@ -25,7 +25,7 @@ prog_ws = sh.worksheet("DART_Progress")
 
 KST = timezone('Asia/Seoul')
 
-# ---- 스타일(애플 감성) ----
+# --- Apple 스타일 (UI/폰트/버튼 등) ---
 st.set_page_config(page_title="DART 임원 모니터링", layout="wide")
 st.markdown("""
 <style>
@@ -40,34 +40,41 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
 
 st.markdown("<h2 style='font-size:2.3rem;margin-bottom:0.7em;'><b>DART 임원 <span style='color:#007aff'>‘주요경력’</span> 모니터링 서비스</b></h2>", unsafe_allow_html=True)
 
-# ---- API KEY (2열 레이아웃) ----
+# --- API KEY (3개씩 2줄 라디오+직접입력 우선) ---
+api_presets = [
+    ("API 1", "eeb883965e882026589154074cddfc695330693c"),
+    ("API 2", "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176"),
+    ("API 3", "5e75506d60b4ab3f325168019bcacf364cf4937e"),
+    ("API 4", "6c64f7efdea057881deb91bbf3aaa5cb8b03d394"),
+    ("API 5", "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8"),
+    ("API 6", "c38b1fdef8960f694f56a50cf4e52d5c25fd5675"),
+]
+api_labels = [x[0] for x in api_presets]
+api_keys_list = [x[1] for x in api_presets]
+
+# ---- 프리셋 3개씩 2줄 라디오 버튼 ----
 col_api_left, col_api_right = st.columns([1,3])
 with col_api_left:
     st.markdown("<div class='api-label'>프리셋 API KEY<br>(한 번에 하나 선택)</div>", unsafe_allow_html=True)
-    api_options = [
-        ("API 1", "eeb883965e882026589154074cddfc695330693c"),
-        ("API 2", "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176"),
-        ("API 3", "5e75506d60b4ab3f325168019bcacf364cf4937e"),
-        ("API 4", "6c64f7efdea057881deb91bbf3aaa5cb8b03d394"),
-        ("API 5", "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8"),
-        ("API 6", "c38b1fdef8960f694f56a50cf4e52d5c25fd5675"),
-    ]
-    api_select = st.radio(
-        "", [x[0] for x in api_options], index=0, key="api_preset"
-    )
-    api_key_selected = dict(api_options)[api_select]
+    col_api_row1, col_api_row2 = st.columns(2)
+    with col_api_row1:
+        selected1 = st.radio("", api_labels[:3], index=0, key="api_preset_row1")
+    with col_api_row2:
+        selected2 = st.radio("", api_labels[3:], key="api_preset_row2")
+
+    # 두 줄 중 선택된 API 가져오기 (단, 직접입력 있으면 무시됨)
+    selected_preset = selected1 if selected1 != api_labels[0] else selected2
+    api_key_selected = dict(api_presets)[selected_preset] if selected_preset in dict(api_presets) else api_presets[0][1]
 
 with col_api_right:
-    st.markdown("<div class='api-label'>API Key 직접 입력<br><span style='font-size:13px;color:#888;'>(한 개만 붙여넣기, 쉼표/줄바꿈 가능, 우선 적용)</span></div>", unsafe_allow_html=True)
+    st.markdown("<div class='api-label'>API Key 직접 입력<br><span style='font-size:13px;color:#888;'>(값 입력시 프리셋 무시, 한 개만 적용)</span></div>", unsafe_allow_html=True)
     api_key_input = st.text_area(
         "", value="", height=40, placeholder="복사/붙여넣기 (한 개만 적용)"
     )
-
 api_keys = [k.strip() for k in api_key_input.replace(",", "\n").splitlines() if k.strip()]
 corp_key = api_keys[0] if api_keys else api_key_selected
 
 # ---- 검색 폼 ----
-# 이메일 입력 및 UX 개선
 def focus_email():
     js = """<script>
     setTimeout(function() {
@@ -103,14 +110,15 @@ jobs_data = jobs_ws.get_all_records()
 unfinished = [r for r in jobs_data if r["status"] in ("stopped","failed")][-1:]  # 최근 1개
 if unfinished:
     rj = unfinished[0]
-    st.info(
-        f"🔄 미완료(중단) 작업 이어받기: "
+    st.markdown(
+        f"<div style='background:#eef6fe;border-radius:9px;padding:12px 16px 8px 16px;margin-bottom:5px;'>"
+        f"🔄 <b>미완료(중단) 작업 이어받기:</b> "
         f"<span class='job-badge'>{rj['job_id']}</span> "
-        f"({rj.get('user_email','')}, {rj.get('start_time','')})",
+        f"({rj.get('user_email','')}, {rj.get('start_time','')})"
+        f"</div>",
         unsafe_allow_html=True
     )
     if st.button("▶️ 이어서 복구/재시작", key="resume_btn"):
-        # 이어받기 로직 (구현 필요)
         st.session_state.resume_job = rj["job_id"]
 
 # ---- 컨트롤 버튼/진행상태 ----
@@ -139,7 +147,6 @@ session.mount("https://", HTTPAdapter(
     max_retries=Retry(total=2, backoff_factor=1, status_forcelist=[500,502,503,504])
 ))
 
-# ---- corpCode.xml 캐시 ----
 @st.cache_data(show_spinner=False)
 def load_corp_list(key):
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
@@ -163,7 +170,6 @@ def load_corp_list(key):
     except Exception as e:
         return None, str(e)
 
-# ---- 임원현황 API 호출 ----
 def fetch_execs(key, corp_code, year, rpt):
     try:
         payload = {
@@ -220,7 +226,6 @@ if st.session_state.get("running", False):
         if not st.session_state.get("running", False):
             break
         rows, err = fetch_execs(corp_key, corp["corp_code"], y, rpt)
-        # 진행률/상태 갱신
         elapsed = (datetime.now() - start_time).total_seconds()
         speed = i / elapsed if elapsed else 1
         eta = int((N-i) / speed) if speed > 0 else 0
