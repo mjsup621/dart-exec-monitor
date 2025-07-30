@@ -177,13 +177,13 @@ try:
 except: pass
 if recent_failed:
     rj = recent_failed[0]
-    st.info(f"🔄 미완료(중단) 작업 이어받기: <span class='job-badge'>{rj['job_id']}</span> ({rj.get('user_email','')}, {rj.get('start_time','')})", unsafe_allow_html=True)
+    st.markdown(
+        f"🔄 <span class='job-badge'>미완료(중단) 작업 이어받기:</span> <b>{rj['job_id']}</b> ({rj.get('user_email','')}, {rj.get('start_time','')})",
+        unsafe_allow_html=True
+    )
     if st.button("▶️ 이어서 복구/재시작"):
         st.session_state.running = True
-        # targets 다시 세팅 (전체 → progress_idx 부터)
         st.session_state.progress_idx = int(rj.get("processed_count", 0))
-        # results 재세팅 (기존 결과 복원)
-        # (예시: 로컬/DB/S3에 임시 저장된 DataFrame을 불러오는 방식도 가능. 여기선 간단화)
         st.session_state.results = []
         st.experimental_rerun()
 
