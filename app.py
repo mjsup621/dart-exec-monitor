@@ -117,11 +117,15 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
     color: #111 !important;
     background: #fff !important;
   }
-  /* 라디오 버튼 프리셋(비활성/활성 모두) 텍스트 */
+  /* 라디오 버튼 프리셋(비활성/활성 모두) 텍스트 - 더 강하게 지정 */
+  .stRadio label,
   .stRadio label span,
+  .stRadio div[role="radio"],
   .stRadio div[role="radio"] span {
     color: #111 !important;
+    background: transparent !important;
     opacity: 1 !important;
+    text-shadow: none !important;
   }
   /* 파란색 칸(알림, info 등) 텍스트 */
   .stAlert, .stAlert p, .stAlert span, .stAlert div {
