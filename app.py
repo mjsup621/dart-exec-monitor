@@ -58,7 +58,7 @@ st.markdown("""
 <style>
 .stApp {background: #f8f9fa !important; font-family:'SF Pro Display','Apple SD Gothic Neo','Pretendard',sans-serif;}
 h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;}
-.stProgress > div > div {background-color:#007aff!important;}
+.stProgress > div > div {background-color:#f0f0f0!important;}
 .api-label {font-weight:600; color:#111; font-size:17px; margin-bottom:8px;}
 .stDataFrame {border-radius:18px;}
 .job-badge {display:inline-block;background:#007aff;color:#fff;border-radius:8px;padding:0 7px;}
