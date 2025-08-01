@@ -26,6 +26,58 @@ prog_ws = sh.worksheet("DART_Progress")
 
 KST = timezone('Asia/Seoul')
 
+# --- API 호출량 관리 ---
+def get_api_usage_info():
+    """API별 호출 가능량 정보 반환 (24시간마다 리셋)"""
+    current_time = datetime.now(KST)
+    today = current_time.strftime("%Y%m%d")
+    
+    if 'api_usage_date' not in st.session_state or st.session_state.api_usage_date != today:
+        # 새로운 날짜면 모든 API 호출량 리셋
+        st.session_state.api_usage_date = today
+        st.session_state.api_usage = {
+            "eeb883965e882026589154074cddfc695330693c": 20000,
+            "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176": 20000,
+            "5e75506d60b4ab3f325168019bcacf364cf4937e": 20000,
+            "6c64f7efdea057881deb91bbf3aaa5cb8b03d394": 20000,
+            "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8": 20000,
+            "c38b1fdef8960f694f56a50cf4e52d5c25fd5675": 20000,
+        }
+    
+    return st.session_state.api_usage
+
+def update_api_usage(api_key, used_count=1):
+    """API 호출량 업데이트"""
+    usage_info = get_api_usage_info()
+    if api_key in usage_info:
+        usage_info[api_key] = max(0, usage_info[api_key] - used_count)
+
+# --- API 호출량 관리 ---
+def get_api_usage_info():
+    """API별 호출 가능량 정보 반환 (24시간마다 리셋)"""
+    current_time = datetime.now(KST)
+    today = current_time.strftime("%Y%m%d")
+    
+    if 'api_usage_date' not in st.session_state or st.session_state.api_usage_date != today:
+        # 새로운 날짜면 모든 API 호출량 리셋
+        st.session_state.api_usage_date = today
+        st.session_state.api_usage = {
+            "eeb883965e882026589154074cddfc695330693c": 20000,
+            "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176": 20000,
+            "5e75506d60b4ab3f325168019bcacf364cf4937e": 20000,
+            "6c64f7efdea057881deb91bbf3aaa5cb8b03d394": 20000,
+            "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8": 20000,
+            "c38b1fdef8960f694f56a50cf4e52d5c25fd5675": 20000,
+        }
+    
+    return st.session_state.api_usage
+
+def update_api_usage(api_key, used_count=1):
+    """API 호출량 업데이트"""
+    usage_info = get_api_usage_info()
+    if api_key in usage_info:
+        usage_info[api_key] = max(0, usage_info[api_key] - used_count)
+
 # --- Apple 스타일 (UI/폰트/버튼 등) ---
 st.set_page_config(page_title="DART 임원 모니터링", layout="wide")
 st.markdown("""
@@ -38,6 +90,7 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
 .job-badge {display:inline-block;background:#007aff;color:#fff;border-radius:8px;padding:0 7px;}
 .api-limit-warning {background:#fff3cd;border:1px solid #ffeaa7;border-radius:8px;padding:12px;margin:10px 0;}
 .success-box {background:#d1edff;border-radius:8px;padding:12px;margin:10px 0;}
+.progress-container {background:#f8f9fa;border-radius:8px;padding:12px;margin:10px 0;border:1px solid #e9ecef;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -62,6 +115,8 @@ def add_recent_api(api_key):
     st.session_state.recent_apis = st.session_state.recent_apis[:3]
 
 # --- API KEY (프리셋 + 최근 사용 + 직접입력) ---
+api_usage_info = get_api_usage_info()
+
 api_presets = [
     ("API 1", "eeb883965e882026589154074cddfc695330693c"),
     ("API 2", "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176"),
@@ -71,6 +126,12 @@ api_presets = [
     ("API 6", "c38b1fdef8960f694f56a50cf4e52d5c25fd5675"),
 ]
 
+# API 프리셋에 호출 가능량 표시
+api_labels_with_usage = []
+for name, key in api_presets:
+    remaining = api_usage_info.get(key, 20000)
+    api_labels_with_usage.append(f"{name}(호출가능: {remaining:,})")
+
 # 최근 사용 API 표시
 recent_apis = get_recent_apis()
 if recent_apis:
@@ -78,7 +139,6 @@ if recent_apis:
     for i, api in enumerate(recent_apis, 1):
         st.markdown(f"&nbsp;&nbsp;최근 {i}: `{api[:8]}...{api[-8:]}`")
 
-api_labels = [x[0] for x in api_presets]
 api_keys_list = [x[1] for x in api_presets]
 
 # ---- 프리셋 API 키 선택 (한 개만 선택 가능) ----
@@ -89,12 +149,14 @@ with col_api_left:
     # 단일 라디오 버튼으로 모든 API 옵션 표시
     selected_preset = st.radio(
         "", 
-        options=api_labels, 
+        options=api_labels_with_usage, 
         index=0, 
         key="api_preset_single"
     )
     
-    api_key_selected = dict(api_presets)[selected_preset]
+    # 선택된 API 키 추출
+    selected_index = api_labels_with_usage.index(selected_preset)
+    api_key_selected = api_presets[selected_index][1]
 
 with col_api_right:
     st.markdown("<div class='api-label'>API Key 직접 입력<br><span style='font-size:13px;color:#888;'>(입력 시 프리셋 무시됨)</span></div>", unsafe_allow_html=True)
@@ -109,7 +171,7 @@ if api_keys:
     st.info(f"✅ 직접 입력 API 사용: `{corp_key[:8]}...{corp_key[-8:]}`")
 else:
     corp_key = api_key_selected  # 프리셋에서 선택된 키 사용
-    st.info(f"✅ 프리셋 API 사용: **{selected_preset}** (`{corp_key[:8]}...{corp_key[-8:]}`)")
+    st.info(f"✅ 프리셋 API 사용: **{api_presets[selected_index][0]}** (`{corp_key[:8]}...{corp_key[-8:]}`)")
 
 # ---- 검색 폼 ----
 def focus_email():
@@ -148,11 +210,29 @@ unfinished = [r for r in jobs_data if r["status"] in ("stopped","failed")][-1:] 
 
 if unfinished:
     rj = unfinished[0]
+    # 날짜/시간 형식 변경
+    start_time_str = rj.get('start_time', '')
+    if start_time_str:
+        try:
+            # ISO 형식을 파싱하여 원하는 형식으로 변환
+            dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = KST.localize(dt)
+            else:
+                dt = dt.astimezone(KST)
+            formatted_date = dt.strftime('%Y-%m-%d')
+            formatted_time = dt.strftime('%H:%M')
+            display_time = f"{formatted_date}, {formatted_time}"
+        except:
+            display_time = start_time_str
+    else:
+        display_time = "시간 정보 없음"
+    
     st.markdown(
         f"<div style='background:#eef6fe;border-radius:9px;padding:12px 16px 8px 16px;margin-bottom:5px;'>"
         f"🔄 <b>미완료(중단) 작업 이어받기:</b> "
         f"<span class='job-badge'>{rj['job_id']}</span> "
-        f"({rj.get('user_email','')}, {rj.get('start_time','')})"
+        f"({rj.get('user_email','')}, {display_time})"
         f"</div>",
         unsafe_allow_html=True
     )
@@ -237,6 +317,12 @@ def fetch_execs(key, corp_code, year, rpt):
             st.session_state.api_call_count = 0
         st.session_state.api_call_count += 1
         
+        # API 사용량 업데이트
+        update_api_usage(key)
+        
+        # API 사용량 업데이트
+        update_api_usage(key)
+        
         response = session.get(
             "https://opendart.fss.or.kr/api/exctvSttus.json",
             params=payload, timeout=20
@@ -313,7 +399,34 @@ if 'monitoring_results' in st.session_state and st.session_state.monitoring_resu
             st.success("저장된 결과가 삭제되었습니다.")
             st.rerun()
 
-# ---- 진행률 바/진행상태 ----
+# ---- 진행률 바/진행상태 (항상 표시) ----
+if 'progress_container' not in st.session_state:
+    st.session_state.progress_container = st.container()
+
+with st.session_state.progress_container:
+    st.markdown("<div class='progress-container'>", unsafe_allow_html=True)
+    st.markdown("**📊 진행 상황**")
+    
+    # 초기 진행률 표시
+    if 'progress' not in st.session_state:
+        st.session_state.progress = 0
+    if 'total_count' not in st.session_state:
+        st.session_state.total_count = 0
+    if 'current_count' not in st.session_state:
+        st.session_state.current_count = 0
+    
+    progress_bar = st.progress(
+        st.session_state.progress,
+        text=f"{st.session_state.current_count:,}/{st.session_state.total_count:,} ({st.session_state.progress*100:.0f}%) · 예상 남은 시간 계산 중..."
+    )
+    
+    # API 상태 표시
+    api_usage_display = get_api_usage_info()
+    current_remaining = api_usage_display.get(corp_key, 20000)
+    st.markdown(f"**🔧 현재 API 호출 가능량: {current_remaining:,}회**")
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
 prog_placeholder = st.empty()
 status_placeholder = st.empty()
 api_status_placeholder = st.empty()
@@ -377,6 +490,10 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
     start_time = datetime.now()
     api_limit_hit = False
     
+    # 진행률 초기화
+    st.session_state.total_count = N
+    st.session_state.current_count = 0
+    
     for i, (corp, y, rpt) in enumerate(targets, 1):
         if not st.session_state.get("running", False) and not is_resume:
             break
@@ -424,14 +541,19 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
             continue
             
         # 진행률 및 상태 업데이트
+        st.session_state.current_count = i
+        st.session_state.progress = i / N
+        
         elapsed = (datetime.now() - start_time).total_seconds()
         speed = i / elapsed if elapsed > 0 else 1
         eta = int((N-i) / speed) if speed > 0 else 0
         
-        prog_placeholder.progress(
-            i/N, 
-            text=f"{i:,}/{N:,} ({i/N*100:.0f}%) · 예상 남은 시간 {eta//60}분 {eta%60}초"
-        )
+        # 진행률바 업데이트 (세션 상태의 컨테이너에서)
+        with st.session_state.progress_container:
+            st.progress(
+                st.session_state.progress, 
+                text=f"{i:,}/{N:,} ({st.session_state.progress*100:.0f}%) · 예상 남은 시간 {eta//60}분 {eta%60}초"
+            )
         
         status_placeholder.markdown(
             f"<span style='color:#222;font-size:17px;font-weight:600;'>"
@@ -462,7 +584,11 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
     # API 한도 초과가 아닌 경우에만 완료 처리
     if not api_limit_hit:
         st.session_state.running = False
-        prog_placeholder.progress(1.0, text=f"전체 조회 완료!")
+        st.session_state.progress = 1.0
+        
+        # 진행률바 완료 표시
+        with st.session_state.progress_container:
+            st.progress(1.0, text="전체 조회 완료!")
         
         # 완료 상태 업데이트
         ts1 = datetime.now(KST).isoformat()
@@ -513,12 +639,13 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
             df.to_excel(w, index=False, sheet_name="DART_Results")
         excel_data = buf.getvalue()
         
-        # 다운로드 버튼
+        # 다운로드 버튼 (결과 리셋 방지)
         st.download_button(
             "📥 XLSX 다운로드", 
             data=excel_data,
             file_name=f"dart_results_{job_id}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"download_{job_id}"
         )
         
         # **핵심: 자동 메일 발송**
@@ -561,7 +688,7 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
             st.error(f"❌ 자동 메일 발송 실패: {msg}")
             
             # 수동 발송 버튼 제공
-            if st.button("📧 수동 메일 발송 재시도"):
+            if st.button("📧 수동 메일 발송 재시도", key=f"manual_send_{job_id}"):
                 success2, msg2 = send_email(
                     to_email=recipient,
                     subject=email_subject,
