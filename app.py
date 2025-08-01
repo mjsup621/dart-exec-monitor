@@ -52,32 +52,6 @@ def update_api_usage(api_key, used_count=1):
     if api_key in usage_info:
         usage_info[api_key] = max(0, usage_info[api_key] - used_count)
 
-# --- API 호출량 관리 ---
-def get_api_usage_info():
-    """API별 호출 가능량 정보 반환 (24시간마다 리셋)"""
-    current_time = datetime.now(KST)
-    today = current_time.strftime("%Y%m%d")
-    
-    if 'api_usage_date' not in st.session_state or st.session_state.api_usage_date != today:
-        # 새로운 날짜면 모든 API 호출량 리셋
-        st.session_state.api_usage_date = today
-        st.session_state.api_usage = {
-            "eeb883965e882026589154074cddfc695330693c": 20000,
-            "1290bb1ec7879cba0e9f9b350ac97bb5d38ec176": 20000,
-            "5e75506d60b4ab3f325168019bcacf364cf4937e": 20000,
-            "6c64f7efdea057881deb91bbf3aaa5cb8b03d394": 20000,
-            "d9f0d92fbdc3a2205e49c66c1e24a442fa8c6fe8": 20000,
-            "c38b1fdef8960f694f56a50cf4e52d5c25fd5675": 20000,
-        }
-    
-    return st.session_state.api_usage
-
-def update_api_usage(api_key, used_count=1):
-    """API 호출량 업데이트"""
-    usage_info = get_api_usage_info()
-    if api_key in usage_info:
-        usage_info[api_key] = max(0, usage_info[api_key] - used_count)
-
 # --- Apple 스타일 (UI/폰트/버튼 등) ---
 st.set_page_config(page_title="DART 임원 모니터링", layout="wide")
 st.markdown("""
@@ -92,6 +66,29 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
 .success-box {background:#d1edff;border-radius:8px;padding:12px;margin:10px 0;}
 .progress-container {background:#f8f9fa;border-radius:8px;padding:12px;margin:10px 0;border:1px solid #e9ecef;}
 .stProgress > div > div > div {font-size: 16px !important; font-weight: 600 !important; color: #333 !important;}
+.loading-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #e3f2fd;
+    border-radius: 12px;
+    padding: 16px;
+    margin: 10px 0;
+    border: 2px solid #2196f3;
+}
+.spinner {
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid #2196f3;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+    margin-right: 12px;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -380,13 +377,13 @@ if 'monitoring_results' in st.session_state and st.session_state.monitoring_resu
     st.success(f"💾 저장된 결과: {len(prev_df):,}건 (작업ID: {st.session_state.get('current_job_id', 'Unknown')})")
     st.dataframe(prev_df, use_container_width=True)
     
-    # 이전 결과 다운로드 버튼 (항상 사용 가능)
+    # 이전 결과 다운로드 버튼 (항상 사용 가능) - 3개 버튼으로 구성
     prev_buf = io.BytesIO()
     with pd.ExcelWriter(prev_buf, engine="openpyxl") as w:
         prev_df.to_excel(w, index=False, sheet_name="DART_Results")
     prev_excel_data = prev_buf.getvalue()
     
-    col_download, col_clear = st.columns([1, 1])
+    col_download, col_email, col_clear = st.columns([1, 1, 1])
     with col_download:
         st.download_button(
             "📥 저장된 결과 다운로드", 
@@ -395,6 +392,37 @@ if 'monitoring_results' in st.session_state and st.session_state.monitoring_resu
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="download_saved_results"
         )
+    
+    with col_email:
+        if st.button("📧 저장된 결과 메일 발송", key="email_saved_results"):
+            if not is_valid_email(recipient):
+                st.error("유효한 이메일 주소를 입력하세요.")
+            else:
+                email_subject = f"[DART] 저장된 모니터링 결과 ({st.session_state.get('current_job_id', 'saved')})"
+                email_body = f"""
+저장된 DART 모니터링 결과를 발송합니다.
+
+작업ID: {st.session_state.get('current_job_id', 'saved')}
+결과 건수: {len(prev_df):,}건
+발송 시간: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}
+
+첨부된 Excel 파일을 확인하세요.
+"""
+                
+                with st.spinner("메일 발송 중..."):
+                    success, msg = send_email(
+                        to_email=recipient,
+                        subject=email_subject,
+                        body=email_body,
+                        attachment_bytes=prev_excel_data,
+                        filename=f"dart_results_{st.session_state.get('current_job_id', 'saved')}.xlsx"
+                    )
+                
+                if success:
+                    st.success(f"✅ 저장된 결과가 {recipient}로 발송되었습니다!")
+                else:
+                    st.error(f"❌ 메일 발송 실패: {msg}")
+    
     with col_clear:
         if st.button("🗑️ 저장된 결과 삭제", key="clear_saved_results"):
             st.session_state.monitoring_results = []
@@ -407,6 +435,7 @@ if 'monitoring_results' in st.session_state and st.session_state.monitoring_resu
 prog_placeholder = st.empty()
 status_placeholder = st.empty()
 api_status_placeholder = st.empty()
+loading_placeholder = st.empty()
 
 # ---- 모니터링 수행 (Main) ----
 if st.session_state.get("running", False) or st.session_state.get("resume_job_id"):
@@ -426,14 +455,26 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
         ts0 = datetime.now(KST).isoformat()
         jobs_ws.append_row([job_id, recipient, ts0, "running"])
 
+    # 즉시 로딩 인디케이터 표시
+    loading_placeholder.markdown("""
+    <div class='loading-indicator'>
+        <div class='spinner'></div>
+        <strong>🔄 회사 목록을 로드하고 있습니다... 잠시만 기다려주세요.</strong>
+    </div>
+    """, unsafe_allow_html=True)
+
     with st.spinner("회사 목록 로드 중…"):
         corps, corp_err = load_corp_list(corp_key)
         if not corps:
             st.session_state.running = False
+            loading_placeholder.empty()
             st.error(f"회사 목록 로드 실패: {corp_err}")
             if not is_resume:
                 jobs_ws.append_row([job_id, recipient, datetime.now(KST).isoformat(), "failed"])
             st.stop()
+
+    # 회사 목록 로드 완료 후 로딩 인디케이터 제거
+    loading_placeholder.empty()
 
     kws = [w.strip() for w in keywords.split(",") if w.strip()]
     all_c = [
@@ -479,8 +520,16 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
     prog_placeholder.markdown("<div class='progress-container'>", unsafe_allow_html=True)
     prog_placeholder.markdown("**📊 진행 상황**")
     
-    # 초기 진행률바 표시 (0%부터 시작)
-    prog_placeholder.progress(0, text=f"📊 API 호출: 0/20,000 | 진행: 0/{N:,} (0%) | 남은시간: 계산 중...")
+    # 초기 진행률바와 상태 표시 (0%부터 시작)
+    prog_placeholder.progress(0, text=f"📊 API 호출: 0/20,000 | 진행: 0/{N:,} (0%) | 시작 준비 중...")
+    
+    # API 호출 시작 알림
+    status_placeholder.markdown(
+        f"<div style='background:#e8f5e8;border-radius:8px;padding:12px;margin:10px 0;border:1px solid #4caf50;'>"
+        f"🚀 <strong>API 호출 시작!</strong> 총 {N:,}건의 데이터를 조회합니다."
+        f"</div>", 
+        unsafe_allow_html=True
+    )
     
     # 이어받기 모드인 경우 시작 인덱스 설정
     start_index = 0
@@ -496,6 +545,29 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
         # 중지 버튼 체크 (이어받기 모드에서도 작동하도록)
         if not st.session_state.get("running", False):
             break
+        
+        # 진행률 및 상태 업데이트 (호출 전에 먼저 업데이트)
+        st.session_state.current_count = i
+        st.session_state.progress = i / N
+        
+        elapsed = (datetime.now() - start_time).total_seconds()
+        speed = i / elapsed if elapsed > 0 else 1
+        eta = int((N-i) / speed) if speed > 0 else 0
+        
+        # 진행률바 업데이트 (호출 전에 먼저 표시)
+        prog_placeholder.progress(
+            st.session_state.progress, 
+            text=f"📊 API 호출: {st.session_state.get('api_call_count', 0):,}/20,000 | 진행: {i:,}/{N:,} ({st.session_state.progress*100:.0f}%) | 남은시간: {eta//60}분 {eta%60}초"
+        )
+        
+        # 현재 처리 중인 회사 정보 표시
+        status_placeholder.markdown(
+            f"<div style='background:#f0f8ff;border-radius:8px;padding:12px;margin:5px 0;border-left:4px solid #007aff;'>"
+            f"🏢 <strong>처리 중:</strong> {corp['corp_name']} · {y}년 · {REPORTS[rpt]} "
+            f"<span style='color:#666;font-size:14px;'>({i:,}/{N:,})</span>"
+            f"</div>", 
+            unsafe_allow_html=True
+        )
         
         rows, err = fetch_execs(corp_key, corp["corp_code"], y, rpt)
         
@@ -534,26 +606,6 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
         
         if err and err != "API_LIMIT_EXCEEDED":
             continue
-            
-        # 진행률 및 상태 업데이트 (매번 업데이트)
-        st.session_state.current_count = i
-        st.session_state.progress = i / N
-        
-        elapsed = (datetime.now() - start_time).total_seconds()
-        speed = i / elapsed if elapsed > 0 else 1
-        eta = int((N-i) / speed) if speed > 0 else 0
-        
-        # 진행률바 업데이트 (매번 즉시 업데이트)
-        prog_placeholder.progress(
-            st.session_state.progress, 
-            text=f"📊 API 호출: {st.session_state.get('api_call_count', 0):,}/20,000 | 진행: {i:,}/{N:,} ({st.session_state.progress*100:.0f}%) | 남은시간: {eta//60}분 {eta%60}초"
-        )
-        
-        status_placeholder.markdown(
-            f"<span style='color:#222;font-size:17px;font-weight:600;'>"
-            f"{corp['corp_name']} · {y}년 · {REPORTS[rpt]}</span>", 
-            unsafe_allow_html=True
-        )
         
         # 결과 수집 및 세션 상태에 저장
         for r in rows:
@@ -584,6 +636,13 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
         prog_placeholder.progress(1.0, text="✅ 전체 조회 완료!")
         
         # 완료 상태 업데이트
+        status_placeholder.markdown(
+            f"<div style='background:#e8f5e8;border-radius:8px;padding:12px;margin:10px 0;border:1px solid #4caf50;'>"
+            f"✅ <strong>모니터링 완료!</strong> 총 {N:,}건 조회 완료"
+            f"</div>", 
+            unsafe_allow_html=True
+        )
+        
         ts1 = datetime.now(KST).isoformat()
         prog_ws.append_row([
             job_id, N, f"{start_y}-{end_y}", 
