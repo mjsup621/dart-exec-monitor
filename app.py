@@ -240,6 +240,13 @@ if unfinished:
     if st.button("▶️ 이어서 복구/재시작", key="resume_btn"):
         st.session_state.resume_job_id = rj["job_id"]
         st.session_state.resume_data = rj
+        
+        # 이어받기 데이터에 진행 상황 추가
+        if 'resume_progress' in st.session_state:
+            rj['resume_progress'] = st.session_state.resume_progress
+        if 'resume_results' in st.session_state:
+            rj['resume_results'] = st.session_state.resume_results
+            
         st.success(f"작업 {rj['job_id']} 복구 준비 완료!")
 
 # ---- 컨트롤 버튼/진행상태 ----
@@ -451,12 +458,16 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
     if 'current_job_id' not in st.session_state:
         st.session_state.current_job_id = job_id
     
-    # 새 작업 시작 시 이전 결과 초기화
-    if st.session_state.current_job_id != job_id:
-        st.session_state.monitoring_results = []
-        st.session_state.current_job_id = job_id
-    
-    results = st.session_state.monitoring_results.copy()
+    # 이어받기 모드인 경우 이전 결과 복원
+    if is_resume and st.session_state.get("resume_data") and 'resume_results' in st.session_state.resume_data:
+        st.session_state.monitoring_results = st.session_state.resume_data['resume_results']
+        results = st.session_state.monitoring_results.copy()
+    else:
+        # 새 작업 시작 시 이전 결과 초기화
+        if st.session_state.current_job_id != job_id:
+            st.session_state.monitoring_results = []
+            st.session_state.current_job_id = job_id
+        results = st.session_state.monitoring_results.copy()
     start_time = datetime.now()
     api_limit_hit = False
     
@@ -471,7 +482,17 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
     # 초기 진행률바 표시 (0%부터 시작)
     prog_placeholder.progress(0, text=f"📊 API 호출: 0/20,000 | 진행: 0/{N:,} (0%) | 남은시간: 계산 중...")
     
-    for i, (corp, y, rpt) in enumerate(targets, 1):
+    # 이어받기 모드인 경우 시작 인덱스 설정
+    start_index = 0
+    if is_resume and st.session_state.get("resume_data"):
+        # 이어받기 데이터에서 이전 진행 상황 복원
+        resume_data = st.session_state.resume_data
+        if 'resume_progress' in resume_data:
+            start_index = int(resume_data.get('resume_progress', 0))
+            st.session_state.current_count = start_index
+            st.session_state.progress = start_index / N if N > 0 else 0
+    
+    for i, (corp, y, rpt) in enumerate(targets[start_index:], start_index + 1):
         # 중지 버튼 체크 (이어받기 모드에서도 작동하도록)
         if not st.session_state.get("running", False):
             break
@@ -482,6 +503,10 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
         if err == "API_LIMIT_EXCEEDED":
             api_limit_hit = True
             st.session_state.running = False
+            
+            # 현재까지의 진행 상황을 세션에 저장 (이어받기용)
+            st.session_state.resume_progress = i - 1
+            st.session_state.resume_results = results.copy()
             
             # 현재까지의 진행 상황 저장
             prog_ws.append_row([
@@ -510,7 +535,7 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
         if err and err != "API_LIMIT_EXCEEDED":
             continue
             
-        # 진행률 및 상태 업데이트
+        # 진행률 및 상태 업데이트 (매번 업데이트)
         st.session_state.current_count = i
         st.session_state.progress = i / N
         
@@ -518,7 +543,7 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
         speed = i / elapsed if elapsed > 0 else 1
         eta = int((N-i) / speed) if speed > 0 else 0
         
-        # 진행률바 업데이트 (API 호출 횟수 포함, 폰트 크기 증가)
+        # 진행률바 업데이트 (매번 즉시 업데이트)
         prog_placeholder.progress(
             st.session_state.progress, 
             text=f"📊 API 호출: {st.session_state.get('api_call_count', 0):,}/20,000 | 진행: {i:,}/{N:,} ({st.session_state.progress*100:.0f}%) | 남은시간: {eta//60}분 {eta%60}초"
@@ -547,8 +572,8 @@ if st.session_state.get("running", False) or st.session_state.get("resume_job_id
                 results.append(new_result)
                 st.session_state.monitoring_results.append(new_result)
         
-        # 잠시 쉬기 (API 호출 제한 준수)
-        time.sleep(0.1)
+        # 잠시 쉬기 (API 호출 제한 준수, 진행률바 업데이트를 위해 짧게)
+        time.sleep(0.05)
     
     # API 한도 초과가 아닌 경우에만 완료 처리
     if not api_limit_hit:
