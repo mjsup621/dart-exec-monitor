@@ -89,15 +89,20 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
 }
-/* 다크모드 무시: 모바일/브라우저 다크모드에서도 항상 라이트모드로 보이게 */
+/* 다크모드 무시: Streamlit 앱 전체만 라이트모드로, 위젯/입력창/버튼 등은 건드리지 않음 */
 @media (prefers-color-scheme: dark) {
-  .stApp, body, html {
+  .stApp {
     background: #f8f9fa !important;
     color: #111 !important;
   }
-  h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input, .api-label, .success-box, .progress-container, .api-limit-warning {
+  .api-label, .success-box, .progress-container, .api-limit-warning {
     color: #111 !important;
     background: inherit !important;
+    border-color: #e9ecef !important;
+  }
+  .job-badge {
+    background: #007aff !important;
+    color: #fff !important;
   }
 }
 </style>
