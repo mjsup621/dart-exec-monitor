@@ -110,11 +110,22 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
   .stSelectbox div,
   .stMultiSelect div,
   .stRadio label,
+  .stRadio div[role="radio"],
   .stButton button,
   .stCheckbox label,
   .stDownloadButton button {
     color: #111 !important;
     background: #fff !important;
+  }
+  /* 라디오 버튼 프리셋(비활성/활성 모두) 텍스트 */
+  .stRadio label span,
+  .stRadio div[role="radio"] span {
+    color: #111 !important;
+    opacity: 1 !important;
+  }
+  /* 파란색 칸(알림, info 등) 텍스트 */
+  .stAlert, .stAlert p, .stAlert span, .stAlert div {
+    color: #111 !important;
   }
   /* placeholder(힌트) 색상도 어둡게 */
   .stTextInput input::placeholder,
