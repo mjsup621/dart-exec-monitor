@@ -104,6 +104,24 @@ h1, h2, h3, h4, .stRadio, .stButton button, .stTextInput input {font-weight:600;
     background: #007aff !important;
     color: #fff !important;
   }
+  /* 주요 위젯 텍스트 색상 강제 */
+  .stTextInput input,
+  .stTextArea textarea,
+  .stSelectbox div,
+  .stMultiSelect div,
+  .stRadio label,
+  .stButton button,
+  .stCheckbox label,
+  .stDownloadButton button {
+    color: #111 !important;
+    background: #fff !important;
+  }
+  /* placeholder(힌트) 색상도 어둡게 */
+  .stTextInput input::placeholder,
+  .stTextArea textarea::placeholder {
+    color: #888 !important;
+    opacity: 1 !important;
+  }
 }
 </style>
 """, unsafe_allow_html=True)
